@@ -16,6 +16,7 @@ export interface Api {
   getSceneElements(): readonly any[]
   updateScene(scene: { elements?: readonly any[], captureUpdate?: any }): void
   onChange(cb: (elements: readonly any[], state: any) => void): () => void
+  setActiveTool(tool: { type: string }): void
 }
 /** Excalidraw's convertToExcalidrawElements, from whichever bundle the host ships. */
 export type Convert = (skeletons: any[]) => any[]
@@ -40,50 +41,52 @@ export class Ligne {
   private flip?: boolean
   private from?: string
   private editing?: string
-  private svg: SVGSVGElement
+  readonly layer: SVGSVGElement
   private panel: HTMLDivElement
   private off: (() => void)[] = []
 
-  constructor(private api: Api, private host: HTMLElement, private convert: Convert) {
+  /** `focused`: whether keys are for this canvas (several may be open, e.g. Obsidian panes). */
+  constructor(readonly api: Api, private host: HTMLElement, private convert: Convert,
+    private focused: () => boolean = () => true) {
     host.style.position ||= 'relative'
-    this.svg = document.createElementNS(NS, 'svg')
-    this.svg.classList.add('ligne-layer')
+    this.layer = document.createElementNS(NS, 'svg')
+    this.layer.classList.add('ligne-layer')
     this.panel = document.createElement('div')
     this.panel.className = 'ligne-panel'
-    host.append(this.svg, this.panel)
+    host.append(this.layer, this.panel)
     const on = <K extends keyof WindowEventMap>(t: EventTarget, k: K, f: (e: WindowEventMap[K]) => void) => {
       // capture: keys reach ligne before Excalidraw's own shortcuts (1, 2, 3 pick its tools)
       t.addEventListener(k, f as EventListener, true)
       this.off.push(() => t.removeEventListener(k, f as EventListener, true))
     }
-    on(this.svg, 'pointermove', e => { this.cursor = this.scene(e); this.draw(e.shiftKey) })
-    on(this.svg, 'pointerdown', e => this.down(e))
-    on(this.svg, 'dblclick', () => this.finish())
-    on(this.svg, 'wheel', e => this.canvas()?.dispatchEvent(new WheelEvent('wheel', e)))
+    on(this.layer, 'pointermove', e => { this.cursor = this.scene(e); this.draw(e.shiftKey) })
+    on(this.layer, 'pointerdown', e => this.down(e))
+    on(this.layer, 'dblclick', () => this.finish())
+    on(this.layer, 'wheel', e => this.canvas()?.dispatchEvent(new WheelEvent('wheel', e)))
     on(window, 'keydown', e => this.key(e))
     this.off.push(api.onChange(() => this.draw()))
     this.panelUI()
     this.setActive(false)
   }
 
-  destroy() { this.off.forEach(f => f()); this.svg.remove(); this.panel.remove() }
+  destroy() { this.off.forEach(f => f()); this.layer.remove(); this.panel.remove() }
 
   setActive(on: boolean) {
     this.active = on
-    this.svg.style.pointerEvents = on ? 'all' : 'none'
+    this.layer.style.pointerEvents = on ? 'all' : 'none'
     this.panel.classList.toggle('on', on)
     if (!on) this.reset()
     this.panelUI()
   }
 
-  // --- coordinates: scene = (client - offset) / zoom - scroll ---
+  // --- coordinates: scene = (client - canvas offset) / zoom - scroll; the layer sits in host ---
   private scene(e: MouseEvent): XY {
-    const s = this.api.getAppState(), b = this.host.getBoundingClientRect(), z = s.zoom.value
-    return [(e.clientX - b.left) / z - s.scrollX, (e.clientY - b.top) / z - s.scrollY]
+    const s = this.api.getAppState(), z = s.zoom.value
+    return [(e.clientX - s.offsetLeft) / z - s.scrollX, (e.clientY - s.offsetTop) / z - s.scrollY]
   }
   private screen(p: XY): XY {
-    const s = this.api.getAppState(), z = s.zoom.value
-    return [(p[0] + s.scrollX) * z, (p[1] + s.scrollY) * z]
+    const s = this.api.getAppState(), z = s.zoom.value, b = this.host.getBoundingClientRect()
+    return [(p[0] + s.scrollX) * z + s.offsetLeft - b.left, (p[1] + s.scrollY) * z + s.offsetTop - b.top]
   }
   private canvas() { return this.host.querySelector('canvas.interactive') }
 
@@ -118,7 +121,7 @@ export class Ligne {
   }
 
   private draw(free = false) {
-    if (!this.active) { this.svg.replaceChildren(); return }
+    if (!this.active) { this.layer.replaceChildren(); return }
     const z = this.api.getAppState().zoom.value, color = this.api.getAppState().currentItemStrokeColor
     const path = (pts: XY[], cls: string) => {
       const p = document.createElementNS(NS, 'path')
@@ -139,7 +142,7 @@ export class Ligne {
       c.setAttribute('class', 'ligne-snap' + (hit.end && !this.pts.length ? ' end' : ''))
       kids.push(c)
     }
-    this.svg.replaceChildren(...kids)
+    this.layer.replaceChildren(...kids)
   }
 
   private down(e: PointerEvent) {
@@ -168,7 +171,7 @@ export class Ligne {
 
   private key(e: KeyboardEvent) {
     const t = e.target as HTMLElement
-    if (t.isContentEditable || /INPUT|TEXTAREA/.test(t.tagName)) return
+    if (t.isContentEditable || /INPUT|TEXTAREA/.test(t.tagName) || !this.focused()) return
     if (!this.active) {
       if (e.key === 'm' && !e.ctrlKey && !e.metaKey) this.setActive(true)
       return
@@ -183,7 +186,9 @@ export class Ligne {
     else if (k in KEYS && this.mode === 'line') { this.style = KEYS[k]; this.panelUI() }
     else if (k in SHAPES && this.mode === 'station') { this.shape = SHAPES[k]; this.panelUI() }
     else return
-    e.preventDefault(); e.stopPropagation()
+    e.preventDefault(); e.stopImmediatePropagation()
+    // a host listening before us (Obsidian's Excalidraw plugin) may still have picked a tool by that key
+    setTimeout(() => this.api.setActiveTool({ type: 'selection' }))
     this.draw(e.shiftKey)
   }
 

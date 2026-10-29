@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs --serve",
-    "build": "tsc --noEmit && node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs --vault test-vault",
+    "headless": "tools/headless.sh",
+    "release": "npm run build && rm -rf release && mkdir -p release/ligne && cp main.js manifest.json styles.css release/ligne/ && cd release && zip -qr ligne.zip ligne && echo release/ligne.zip",
     "test": "node tools/run.mjs --test src/core/*.test.ts",
     "check": "tsc --noEmit"
   },
@@ -21,6 +23,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "esbuild": "^0.28.2",
+    "obsidian": "^1.14.4",
     "typescript": "5.9"
   }
 }
