@@ -1,0 +1,7 @@
+node_modules/
+web/app.*
+web/fonts/
+web/styles.css
+web/excalidraw.css
+release/
+main.js

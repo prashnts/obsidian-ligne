@@ -1,0 +1,26 @@
+{
+  "name": "ligne",
+  "version": "0.1.0",
+  "description": "Metro-map lines, stations and zones drawn over Excalidraw: web page + Obsidian plugin.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --serve",
+    "build": "tsc --noEmit && node esbuild.config.mjs",
+    "test": "node tools/run.mjs --test src/core/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "typescript": "5.9"
+  }
+}
