@@ -3,9 +3,12 @@
 //
 // Click to place stops; between them the line runs octilinear (one straight + one 45° leg),
 // traced dotted up to the pointer. Shift: free leg snapped to 8 directions. F flips the leg order.
-// Start on an existing ligne line to branch off it. Double-click / Enter ends, Backspace undoes
-// a stop, Esc cancels (and leaves the tool when nothing is drawn).
-import { lastDir, nearest, octi, round, simplify, snap8, type XY } from './core/geom.ts'
+// Start on an existing ligne line to branch off it, on its end to extend it. Double-click / Enter
+// ends, Backspace undoes a stop, Esc cancels (and leaves the tool when nothing is drawn).
+// S switches to stations: click a line to drop one, its label (grouped text) holds `key: value` data.
+// G copies the graph as text.
+import { lastDir, nearest, octi, round, simplify, snap8, same, type XY } from './core/geom.ts'
+import { graph, toText, type LineData, type Shape, type StationData, type Style } from './core/graph.ts'
 
 /** The slice of the Excalidraw imperative API ligne uses. */
 export interface Api {
@@ -17,23 +20,26 @@ export interface Api {
 /** Excalidraw's convertToExcalidrawElements, from whichever bundle the host ships. */
 export type Convert = (skeletons: any[]) => any[]
 
-export type Style = 'trunk' | 'branch' | 'dotted'
 export const WIDTH: Record<Style, number> = { trunk: 6, branch: 2, dotted: 2 }
 
-/** customData.ligne of a line element: waypoints relative to the element's x, y. */
-export interface LineData { kind: 'line', path: XY[], r: number, style: Style, from?: string }
-
+/** Station dot: diameter, outline, filled with the line colour. */
+const DOT: Record<Shape, { d: number, w: number, fill: boolean }> = {
+  stop: { d: 12, w: 2, fill: false }, interchange: { d: 20, w: 3, fill: false }, commit: { d: 14, w: 2, fill: true },
+}
 const NS = 'http://www.w3.org/2000/svg'
 const SNAP = 10                                   // px on screen
 
 export class Ligne {
   active = false
+  mode: 'line' | 'station' = 'line'
   style: Style = 'trunk'
+  shape: Shape = 'stop'
   r = 24
   private pts: XY[] = []
   private cursor?: XY
   private flip?: boolean
   private from?: string
+  private editing?: string
   private svg: SVGSVGElement
   private panel: HTMLDivElement
   private off: (() => void)[] = []
@@ -81,19 +87,22 @@ export class Ligne {
   }
   private canvas() { return this.host.querySelector('canvas.interactive') }
 
-  /** ligne lines in the scene, with absolute waypoints. */
+  /** ligne lines in the scene: waypoints and drawn points, absolute. */
   private lines() {
+    const abs = (e: any, ps: XY[]) => ps.map(([x, y]) => [x + e.x, y + e.y] as XY)
     return this.api.getSceneElements().filter(e => e.customData?.ligne?.kind === 'line' && !e.isDeleted)
-      .map(e => ({ el: e, path: (e.customData.ligne as LineData).path.map(([x, y]) => [x + e.x, y + e.y] as XY) }))
+      .map(e => ({ el: e, path: abs(e, (e.customData.ligne as LineData).path), drawn: abs(e, e.points) }))
   }
 
-  /** Snaps p onto a nearby ligne line (to branch off it or end on it). */
-  private snapLine(p: XY): { q: XY, id: string } | undefined {
+  /** Snaps p onto a nearby ligne line; `end` when it is on one of the line's ends. */
+  private snapLine(p: XY) {
     const tol = SNAP / this.api.getAppState().zoom.value
-    let best: { q: XY, id: string, d: number } | undefined
+    let best: { q: XY, el: any, path: XY[], d: number, end?: 'start' | 'end' } | undefined
     for (const l of this.lines()) {
-      const n = nearest(l.path, p)
-      if (n.d < tol && (!best || n.d < best.d)) best = { q: n.q, id: l.el.id, d: n.d }
+      const n = nearest(l.drawn, p), [a, b] = [l.path[0], l.path[l.path.length - 1]]
+      const end = Math.hypot(p[0] - a[0], p[1] - a[1]) < tol ? 'start' : Math.hypot(p[0] - b[0], p[1] - b[1]) < tol ? 'end' : undefined
+      if (n.d < tol && (!best || n.d < best.d))
+        best = { q: end ? (end === 'start' ? a : b) : n.q, el: l.el, path: l.path, d: n.d, end }
     }
     return best
   }
@@ -102,7 +111,7 @@ export class Ligne {
   private route(free = false): XY[] {
     if (!this.cursor) return this.pts
     const last = this.pts[this.pts.length - 1]
-    if (!last) return []
+    if (!last || this.mode === 'station') return this.pts
     const c = this.snapLine(this.cursor)?.q ?? this.cursor
     const leg = free ? [last, snap8(last, c)] : octi(last, c, this.flip, lastDir(this.pts))
     return [...this.pts, ...leg.slice(1)]
@@ -125,8 +134,9 @@ export class Ligne {
     const hit = this.cursor && this.snapLine(this.cursor)
     if (hit) {
       const c = document.createElementNS(NS, 'circle'), [x, y] = this.screen(hit.q)
-      c.setAttribute('cx', String(x)); c.setAttribute('cy', String(y)); c.setAttribute('r', '6')
-      c.setAttribute('class', 'ligne-snap')
+      c.setAttribute('cx', String(x)); c.setAttribute('cy', String(y))
+      c.setAttribute('r', String(this.mode === 'station' ? DOT[this.shape].d * z / 2 : hit.end ? 8 : 6))
+      c.setAttribute('class', 'ligne-snap' + (hit.end && !this.pts.length ? ' end' : ''))
       kids.push(c)
     }
     this.svg.replaceChildren(...kids)
@@ -135,10 +145,19 @@ export class Ligne {
   private down(e: PointerEvent) {
     if (e.button !== 0 || e.detail > 1) return
     const p = this.scene(e)
+    if (this.mode === 'station') return this.station(p)
     if (!this.pts.length) {
       const hit = this.snapLine(p)
-      this.pts = [hit?.q ?? p]
-      this.from = hit?.id
+      if (hit?.end) {
+        // extend: carry on from that end, the element is replaced (same id) on finish
+        const d = hit.el.customData.ligne as LineData
+        this.pts = hit.end === 'end' ? hit.path : hit.path.slice().reverse()
+        this.editing = hit.el.id; this.from = d.from; this.style = d.style; this.r = d.r
+        this.panelUI()
+      } else {
+        this.pts = [hit?.q ?? p]
+        this.from = hit?.el.id
+      }
     } else {
       this.cursor = p
       this.pts = this.route(e.shiftKey)
@@ -159,18 +178,46 @@ export class Ligne {
     else if (k === 'Enter') this.finish()
     else if (k === 'Backspace') this.pts.pop()
     else if (k === 'f') this.flip = !(this.flip ?? false)
-    else if (k in KEYS) { this.style = KEYS[k]; this.panelUI() }
+    else if (k === 's') { this.reset(); this.mode = this.mode === 'line' ? 'station' : 'line'; this.panelUI() }
+    else if (k === 'g') this.copy()
+    else if (k in KEYS && this.mode === 'line') { this.style = KEYS[k]; this.panelUI() }
+    else if (k in SHAPES && this.mode === 'station') { this.shape = SHAPES[k]; this.panelUI() }
     else return
     e.preventDefault(); e.stopPropagation()
     this.draw(e.shiftKey)
   }
 
-  private reset() { this.pts = []; this.from = undefined; this.flip = undefined; this.draw() }
+  private reset() { this.pts = []; this.from = this.editing = this.flip = undefined; this.draw() }
+
+  graph() { return graph(this.api.getSceneElements()) }
+  text() { return toText(this.graph()) }
+
+  private copy() {
+    navigator.clipboard?.writeText(this.text())
+    this.panel.querySelector('.copy')?.classList.add('done')
+    setTimeout(() => this.panel.querySelector('.copy')?.classList.remove('done'), 800)
+  }
+
+  /** Drops a station dot on the nearest line (or where clicked), grouped with its label. */
+  private station(p: XY) {
+    const hit = this.snapLine(p), at = hit?.q ?? p, dot = DOT[this.shape]
+    const color = hit?.el.strokeColor ?? this.api.getAppState().currentItemStrokeColor
+    const g = Math.random().toString(36).slice(2, 10), n = this.graph().stations.length + 1
+    const data: StationData = { kind: 'station', line: hit?.el.id, shape: this.shape }
+    const els = this.convert([
+      { type: 'ellipse', x: at[0] - dot.d / 2, y: at[1] - dot.d / 2, width: dot.d, height: dot.d,
+        strokeColor: color, backgroundColor: dot.fill ? color : '#ffffff', fillStyle: 'solid',
+        strokeWidth: dot.w, roughness: 0, groupIds: [g], customData: { ligne: data } },
+      { type: 'text', x: at[0] + dot.d, y: at[1] - dot.d - 20, text: `S${n}`, fontSize: 16, fontFamily: 2,
+        strokeColor: '#1e1e1e', groupIds: [g] },
+    ])
+    this.api.updateScene({ elements: [...this.api.getSceneElements(), ...els], captureUpdate: 'IMMEDIATELY' })
+  }
 
   /** Commits the drawn line as one Excalidraw line element carrying its waypoints. */
   private finish() {
     const pts = simplify(this.pts)
-    if (pts.length < 2) return this.reset()
+    if (pts.length < 2 || same(pts[0], pts[pts.length - 1]) && pts.length < 3) return this.reset()
     const [x, y] = pts[0], rel = (p: XY): XY => [p[0] - x, p[1] - y]
     const data: LineData = { kind: 'line', path: pts.map(rel), r: this.r, style: this.style, from: this.from }
     const s = this.api.getAppState()
@@ -179,7 +226,8 @@ export class Ligne {
       strokeColor: s.currentItemStrokeColor, strokeWidth: WIDTH[this.style], roughness: 0,
       strokeStyle: this.style === 'dotted' ? 'dotted' : 'solid', roundness: null, customData: { ligne: data },
     }])
-    this.api.updateScene({ elements: [...this.api.getSceneElements(), el], captureUpdate: 'IMMEDIATELY' })
+    const rest = this.api.getSceneElements().filter(e => e.id !== this.editing)
+    this.api.updateScene({ elements: [...rest, this.editing ? { ...el, id: this.editing } : el], captureUpdate: 'IMMEDIATELY' })
     this.reset()
   }
 
@@ -189,14 +237,19 @@ export class Ligne {
       x.textContent = label; x.title = title; x.classList.toggle('on', on); x.onclick = f
       return x
     }
-    const styles = (Object.keys(KEYS) as (keyof typeof KEYS)[])
-      .map(k => b(KEYS[k], this.style === KEYS[k], () => { this.style = KEYS[k]; this.panelUI() }, `key ${k}`))
+    const pick = <T extends string>(keys: Record<string, T>, cur: T, set: (v: T) => void) => Object.keys(keys)
+      .map(k => b(keys[k], cur === keys[k], () => { set(keys[k]); this.panelUI() }, `key ${k}`))
+    const mode = (m: typeof this.mode) => b(m, this.mode === m, () => { this.reset(); this.mode = m; this.panelUI() }, 'key s')
+    const opts = this.mode === 'line' ? pick(KEYS, this.style, v => this.style = v) : pick(SHAPES, this.shape, v => this.shape = v)
     const r = document.createElement('input')
     Object.assign(r, { type: 'range', min: '0', max: '80', value: String(this.r), title: 'bend radius' })
     r.oninput = () => { this.r = +r.value; this.draw() }
     this.panel.replaceChildren(b('ligne', this.active, () => this.setActive(!this.active), 'key m'),
-      ...(this.active ? [...styles, r] : []))
+      ...(this.active ? [mode('line'), mode('station'), sep(), ...opts, ...(this.mode === 'line' ? [r] : []),
+        sep(), Object.assign(b('copy graph', false, () => this.copy(), 'key g'), { className: 'copy' })] : []))
   }
 }
 
 const KEYS: Record<string, Style> = { '1': 'trunk', '2': 'branch', '3': 'dotted' }
+const SHAPES: Record<string, Shape> = { '1': 'stop', '2': 'interchange', '3': 'commit' }
+const sep = () => Object.assign(document.createElement('span'), { className: 'sep' })

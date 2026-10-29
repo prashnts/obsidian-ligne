@@ -15,7 +15,10 @@ URL = 'http://localhost:4240/'
 OUT = Path.home() / 'limn-shot' / 'ligne'
 DEMO = [
     ['key', 'm'], ['click', 200, 200], ['click', 500, 300], ['click', 800, 300], ['dbl', 900, 500],
-    ['key', '2'], ['click', 650, 300], ['click', 750, 450], ['move', 900, 700],
+    ['click', 900, 500], ['dbl', 1000, 650],
+    ['key', '2'], ['click', 650, 300], ['dbl', 750, 450],
+    ['key', 's'], ['click', 350, 202], ['key', '2'], ['click', 650, 300], ['key', '3'], ['click', 700, 400],
+    ['key', 's'], ['click', 300, 500], ['move', 600, 600],
 ]
 
 
@@ -37,8 +40,7 @@ def run(name: str, steps: list) -> None:
         page.wait_for_timeout(300)
         OUT.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=OUT / f'{name}.png')
-        print(page.evaluate("JSON.stringify(window.ligne.api.getSceneElements()"
-                            ".map(e => [e.type, e.customData?.ligne?.style, e.points?.length]))"))
+        print(page.evaluate('window.ligne.text()'))
 
 
 if __name__ == '__main__':

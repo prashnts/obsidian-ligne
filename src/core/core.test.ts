@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { graph, toText, type El } from './graph.ts'
 import { nearest, octi, round, simplify, snap8, dist, type XY } from './geom.ts'
 
 const near = (a: XY, b: XY) => assert.ok(dist(a, b) < 1e-6, `${a} ≉ ${b}`)
@@ -35,4 +36,20 @@ test('round: arc tangent to both legs, radius clamped', () => {
 test('nearest finds the segment', () => {
   const n = nearest([[0, 0], [10, 0], [10, 10]], [12, 5])
   assert.equal(n.i, 1); near(n.q, [10, 5]); assert.equal(n.d, 2)
+})
+
+test('graph: stations ordered along their line, labels carry data', () => {
+  const els: El[] = [
+    { id: 'L', type: 'line', x: 10, y: 10, width: 0, height: 0, strokeColor: '#000', points: [[0, 0], [100, 0]],
+      customData: { ligne: { kind: 'line', path: [[0, 0], [100, 0]], r: 0, style: 'trunk' } } },
+    ...([['b', 80, 'J3 · FFC\npitch: 0.5mm'], ['a', 20, 'Head']] as const).flatMap(([id, x, text]): El[] => [
+      { id, type: 'ellipse', x: x + 5, y: 5, width: 10, height: 10, groupIds: [id + 'g'],
+        customData: { ligne: { kind: 'station', line: 'L', shape: 'stop' } } },
+      { id: id + 't', type: 'text', x, y: 0, width: 0, height: 0, text, groupIds: [id + 'g'] }]),
+  ]
+  const g = graph(els)
+  assert.deepEqual(g.stations.map(s => [s.label, s.km]), [['Head', 20], ['J3 · FFC', 80]])
+  assert.deepEqual(g.stations[1].data, { pitch: '0.5mm' })
+  assert.equal(toText(g), 'line L trunk #000\n  10,10 110,10\n  stop Head @30,10 km=20\n'
+    + '  stop "J3 · FFC" @90,10 km=80 pitch=0.5mm\n')
 })
