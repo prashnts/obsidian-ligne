@@ -2,11 +2,26 @@
 .ligne-layer path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .ligne-trace { stroke-dasharray: 2 6; opacity: .7; }
 .ligne-snap { fill: #fff; stroke: #1971c2; stroke-width: 2; }
-.ligne-panel { position: absolute; z-index: 4; bottom: 64px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 4px; align-items: center; padding: 4px; border-radius: 8px;
-  background: var(--island-bg-color, #fff); box-shadow: 0 1px 4px #0003; font: 13px system-ui; }
-.ligne-panel button { white-space: nowrap; border: 0; border-radius: 6px; padding: 4px 8px; background: none; cursor: pointer; color: inherit; }
-.ligne-panel button.on { background: var(--color-primary-light, #e0dfff); }
-.ligne-snap.end { fill: #1971c2; }
-.ligne-panel .sep { width: 1px; align-self: stretch; background: #0002; margin: 0 2px; }
-.ligne-panel button.done { background: #b2f2bb; }
+.ligne-snap.end, .ligne-snap.point { fill: #1971c2; }
+.excalidraw .Island.ligne-panel { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  display: none; gap: 2px; align-items: center; padding: 4px; pointer-events: all; }
+.excalidraw .ligne-panel.on { display: flex; }
+.ligne-panel.loose { top: 64px; z-index: 4; }
+.ligne-panel button.ligne-btn { position: relative; display: flex; align-items: center; gap: 2px; height: 32px; min-width: 32px;
+  padding: 0 6px; border: 0; border-radius: var(--border-radius-lg, 8px); background: none; box-shadow: none;
+  color: var(--icon-fill-color, #1b1b1f); cursor: pointer; font: 11px var(--ui-font, system-ui); }
+.ligne-btn svg { width: 18px; height: 18px; }
+.ligne-panel button.ligne-btn:hover { background: var(--button-hover-bg, #f1f0ff); }
+.ligne-panel button.ligne-btn.on { background: var(--color-surface-primary-container, #e0dfff); }
+.ligne-btn kbd { position: absolute; right: 2px; bottom: 0; font: 8px var(--ui-font, system-ui); opacity: .6; }
+.ligne-panel .sep { width: 1px; align-self: stretch; background: var(--default-border-color, #0002); margin: 2px 4px; }
+.ligne-range { display: flex; align-items: center; }
+.ligne-range input { width: 72px; }
+.ligne-range span { min-width: 2ch; font: 11px var(--ui-font, system-ui); opacity: .7; }
+.excalidraw:has(.ligne-panel.on) .HintViewer { display: none; }
+.excalidraw .Island.ligne-help { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  display: grid; grid-template-columns: auto auto; gap: 4px 12px; padding: 10px 14px; white-space: nowrap;
+  font: 12px var(--ui-font, system-ui); color: var(--text-primary-color, inherit); }
+.ligne-help kbd { justify-self: end; font: 600 11px var(--ui-font, system-ui); opacity: .75; }
+.ligne-guide { stroke-dasharray: 3 4; opacity: .5; }
+.ligne-snap.lane { fill: #fff; stroke: #e8590c; }

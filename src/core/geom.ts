@@ -37,30 +37,36 @@ export function octi(a: XY, b: XY, diagFirst?: boolean, inDir?: XY): XY[] {
 export const lastDir = (pts: XY[]): XY | undefined =>
   pts.length < 2 ? undefined : unit(sub(pts[pts.length - 1], pts[pts.length - 2]))
 
-/** Drops repeated points and joins collinear legs. */
-export function simplify(pts: XY[]): XY[] {
-  const out: XY[] = []
-  for (const p of pts) {
-    if (out.length && same(out[out.length - 1], p)) continue
+/** Indices of the points kept when dropping repeated points and joining collinear legs. */
+export function kept(pts: XY[]): number[] {
+  const out: number[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], at = (k: number) => pts[out[out.length - k]]
+    if (out.length && same(at(1), p)) continue
     if (out.length >= 2) {
-      const u = unit(sub(out[out.length - 1], out[out.length - 2])), v = unit(sub(p, out[out.length - 1]))
+      const u = unit(sub(at(1), at(2))), v = unit(sub(p, at(1)))
       if (Math.abs(u[0] * v[1] - u[1] * v[0]) < EPS && u[0] * v[0] + u[1] * v[1] > 0) out.pop()
     }
-    out.push(p)
+    out.push(i)
   }
   return out
 }
 
-/** Polyline with every bend replaced by an arc of radius ≤ r, sampled every ≤ `step` radians.
- *  The radius shrinks where legs are too short to hold it (two bends share a leg half and half). */
-export function round(pts: XY[], r: number, step = Math.PI / 16): XY[] {
-  if (pts.length < 3 || r <= 0) return pts.slice()
+/** Drops repeated points and joins collinear legs. */
+export const simplify = (pts: XY[]): XY[] => kept(pts).map(i => pts[i])
+
+/** Polyline with every bend replaced by an arc of radius ≤ r (one for all, or per point), sampled
+ *  every ≤ `step` radians. The radius shrinks where legs are too short to hold it (two bends share
+ *  a leg half and half). */
+export function round(pts: XY[], radius: number | readonly number[], step = Math.PI / 16): XY[] {
+  const rs = typeof radius === 'number' ? pts.map(() => radius) : radius
+  if (pts.length < 3) return pts.slice()
   const out: XY[] = [pts[0]]
   for (let i = 1; i < pts.length - 1; i++) {
-    const [p, v, n] = [pts[i - 1], pts[i], pts[i + 1]]
+    const [p, v, n] = [pts[i - 1], pts[i], pts[i + 1]], r = rs[i] ?? 0
     const u1 = unit(sub(v, p)), u2 = unit(sub(n, v))
     const cross = u1[0] * u2[1] - u1[1] * u2[0], th = Math.acos(Math.max(-1, Math.min(1, u1[0] * u2[0] + u1[1] * u2[1])))
-    if (th < EPS || Math.PI - th < EPS) { out.push(v); continue }
+    if (th < EPS || Math.PI - th < EPS || r <= 0) { out.push(v); continue }
     const half = (k: number) => i + k === 0 || i + k === pts.length - 1 ? 1 : 0.5
     const t = Math.min(r * Math.tan(th / 2), dist(p, v) * half(-1), dist(v, n) * half(1))
     const rr = t / Math.tan(th / 2), sg = Math.sign(cross)
@@ -86,4 +92,60 @@ export function nearest(pts: XY[], p: XY): { i: number, q: XY, d: number } {
     if (d < best.d) best = { i, q, d }
   }
   return best
+}
+
+
+const left = (u: XY): XY => [-u[1], u[0]]
+const turn = (pts: XY[], i: number) => {
+  const u1 = unit(sub(pts[i], pts[i - 1])), u2 = unit(sub(pts[i + 1], pts[i]))
+  return u1[0] * u2[1] - u1[1] * u2[0]
+}
+
+/** The point at fraction t of leg i, moved d to the left of travel; on a bend (t = 0) the corner
+ *  of the two moved legs, so that parallel lines bend at the same place. */
+export function offsetAt(pts: XY[], i: number, t: number, d: number): XY {
+  const n = pts.length - 1
+  if (i >= n) { i = n - 1; t = 1 }
+  const a = pts[i], b = pts[i + 1], u = unit(sub(b, a)), nl = left(u)
+  const on: XY = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+  const corner = (k: number) => {
+    // bend k: along the mean normal, d / cos(half the turn) out
+    const n1 = left(unit(sub(pts[k], pts[k - 1]))), n2 = left(unit(sub(pts[k + 1], pts[k])))
+    const m = unit([n1[0] + n2[0], n1[1] + n2[1]]), c = m[0] * n1[0] + m[1] * n1[1]
+    return [pts[k][0] + m[0] * d / c, pts[k][1] + m[1] * d / c] as XY
+  }
+  if (t < EPS && i > 0) return corner(i)
+  if (t > 1 - EPS && i + 1 < n) return corner(i + 1)
+  return [on[0] + nl[0] * d, on[1] + nl[1] * d]
+}
+
+/** pts moved d to the left, bend for bend. */
+export const offset = (pts: XY[], d: number): XY[] => pts.map((_, i) => offsetAt(pts, i, 0, d))
+
+/** Radii for a parallel d to the left: same centres, so bends nest (inside smaller, outside larger). */
+export const concentric = (pts: XY[], rs: readonly number[], d: number): number[] =>
+  pts.map((_, i) => i === 0 || i === pts.length - 1 ? rs[i] : Math.max(0, rs[i] - Math.sign(turn(pts, i)) * d))
+
+/** Where p sits beside pts: leg index, fraction along it, signed distance to the left. */
+export function beside(pts: XY[], p: XY): { i: number, t: number, d: number } {
+  const n = nearest(pts, p), a = pts[n.i], b = pts[n.i + 1] ?? a, l = dist(a, b)
+  const u = unit(sub(b, a)), nl = left(u)
+  return { i: n.i, t: l ? dist(a, n.q) / l : 0, d: (p[0] - n.q[0]) * nl[0] + (p[1] - n.q[1]) * nl[1] }
+}
+
+/** Twisted pair along a (rounded) polyline: two strands crossing every `pitch`, ±amp apart. */
+export function twist(pts: XY[], amp: number, pitch: number): [XY[], XY[]] {
+  const a: XY[] = [], b: XY[] = [], step = pitch / 8
+  let s = 0
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p = pts[i], l = dist(p, pts[i + 1]), u = unit(sub(pts[i + 1], p)), nl = left(u)
+    for (let x = 0; x < l || (i === pts.length - 2 && x <= l); x += step) {
+      const k = Math.min(x, l), w = amp * Math.sin(Math.PI * (s + k) / pitch)
+      const q: XY = [p[0] + u[0] * k, p[1] + u[1] * k]
+      a.push([q[0] + nl[0] * w, q[1] + nl[1] * w]); b.push([q[0] - nl[0] * w, q[1] - nl[1] * w])
+      if (k === l) break
+    }
+    s += l
+  }
+  return [a, b]
 }

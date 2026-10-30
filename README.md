@@ -8,9 +8,19 @@ Excalidraw plugin) next. `src/core/` is dependency-free geometry + graph, reusab
     npm test          # core tests
     uv run --project ~/repo/projects --group ui python tools/shot.py [name]   # → ~/limn-shot/ligne/
 
-Tool: `m` toggles; click stops, double-click/Enter ends, Shift free 8-way leg, `f` flips leg order,
-Backspace undoes a stop, Esc cancels, `1 2 3` trunk/branch/dotted. Start on a line to branch,
-on its end to extend. `s` stations (`1 2 3` stop/interchange/commit), `g` copies the graph text.
+Tool: `m` or the toolbar button toggles; it holds Excalidraw's line (or arrow) tool, so colour, width,
+dash, sloppiness, fill, arrowheads come from Excalidraw's style panel (remembered for ligne; `i` or
+Alt-click takes a line's style). Click stops; click the last stop again (or double-click, Enter) to end;
+end on the first stop for a zone (at the back). Start on a line to branch (tube-map fork: trunk style,
+peels off in a curve towards the pointer's side, `f` swaps the first leg); on its end to extend; drag a
+waypoint to move it. Beside a line the pointer snaps to its lanes: the new line follows it bend for
+bend (same centres); it joins and leaves a lane at 45° in a curve, like a branch; lines sharing lanes are a stack (Excalidraw group:
+click = stack, double-click = one line) and follow when the line they sit on is reshaped.
+Snapping is close range; hold Ctrl/Cmd (or `n`) to place anywhere. Bend radius: slider or `[` `]`, for the line
+being drawn, else the lines selected before `m`. `a` arrowheads, `d` direction ticks, `t` twisted pair (2nd strand in the background colour).
+`s` stations (`1-4` stop/interchange/commit/net flag, `b` boxed label; labels use Excalidraw's font);
+stations follow their line's colour; drag a station along its line, or its label. `k` legend,
+`p`/`P` A5/A6 frame (`o` landscape), `g` graph text, `?` help. Every key has a panel button.
 
 ## Obsidian
 
