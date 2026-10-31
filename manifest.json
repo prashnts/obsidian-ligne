@@ -1,7 +1,7 @@
 {
   "id": "ligne",
   "name": "ligne",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "minAppVersion": "1.8.7",
   "description": "Metro-map lines, stations and branches drawn on Excalidraw drawings (needs the Excalidraw plugin).",
   "author": "noop",
