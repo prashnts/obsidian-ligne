@@ -32,9 +32,11 @@ stroke colour, or Qwiic, Grove, rainbow colours, `w`), FFC by pitch (0.5/1 mm). 
 corner (at the first stop: starts back up): the cable turns over, the back shows (mirrored wires,
 lighter, dashed stripe, an FFC's stiffener instead of its contacts); `⇧B` swaps the bend. `c` cycles
 the connector at both ends (none by default, Dupont, JST PH, SH, MX 1.25; FFC: ZIF), or at the end
-under the pointer; fanned-out wires get one housing each. Click a fanned-out wire's tip: a plain line
-goes on from it in its colour and width. Click a cable's body to branch off it. `x` (or Shift-click) on a wire at a cable
-end splits: click the last wire of the bundle too, then draw it on; it keeps its wires and side.
+under the pointer; fanned-out wires get one housing each. At a flat cable's end, click a wire: a bundle
+of it goes on (click another wire of that end: the bundle up to it; all of them, or ⇧-click: the cable
+itself); it keeps its wires and side. Drag a wire to fan it out; click a fanned wire: a plain line goes
+on from it in its colour and width. Click a cable's body to branch off it. By the pointer, a hint says
+what a click does there.
 `d` direction chevrons along the line, the way it was drawn. `a` arrowheads.
 `s` stations (`1-4` stop/interchange/commit/net flag, `b` boxed label), following their line's colour.
 `l` labels: click a line, type; set along it, on it (knocked out) or beside it (`b`); drag along the line.
