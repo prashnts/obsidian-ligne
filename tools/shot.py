@@ -3,7 +3,8 @@
     uv run --project ~/repo/projects --group ui python tools/shot.py [name] [--steps steps.json]
 
 Steps (JSON list): ["key", "m"], ["click", x, y], ["dbl", x, y], ["move", x, y], ["wait", ms],
-["drag", x1, y1, x2, y2], ["eval", "<js>"], ["shot", name] (an extra screenshot mid-way).
+["drag", x1, y1, x2, y2], ["eval", "<js>"], ["shot", name] (an extra screenshot mid-way),
+["save", path] (the scene as an .excalidraw JSON).
 Default steps draw a trunk with a branch off it. Console errors are printed.
 """
 import json
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-URL = 'http://localhost:4240/'
+URL = 'http://localhost:4240/?blank'
 OUT = Path.home() / 'limn-shot' / 'ligne'
 DEMO = [
     ['key', 'm'], ['click', 300, 250], ['move', 500, 250], ['click', 700, 350], ['move', 850, 350],
@@ -44,6 +45,9 @@ def run(name: str, steps: list) -> None:
                 case ['wait', ms]: page.wait_for_timeout(ms)
                 case ['eval', js]: page.evaluate(js)
                 case ['shot', n]: page.screenshot(path=OUT / f'{n}.png')
+                case ['save', path]:
+                    els = page.evaluate('window.ligne.api.getSceneElements().filter(e => !e.isDeleted)')
+                    Path(path).write_text(json.dumps({'type': 'excalidraw', 'version': 2, 'elements': els}))
                 case ['drag', x1, y1, x2, y2]:
                     page.mouse.move(x1, y1); page.mouse.down()
                     for i in range(1, 9): page.mouse.move(x1 + (x2 - x1) * i / 8, y1 + (y2 - y1) * i / 8)

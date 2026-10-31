@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="excalidraw.css">
   <link rel="stylesheet" href="styles.css">
   <style>html, body, #app { margin: 0; height: 100%; }</style>
-  <script>window.EXCALIDRAW_ASSET_PATH = '/'</script>
+  <script>window.EXCALIDRAW_ASSET_PATH = new URL('.', location.href).href</script>
 </head>
 <body><div id="app"></div><script type="module" src="app.js"></script></body>
 </html>

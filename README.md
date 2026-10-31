@@ -33,6 +33,15 @@ keep a gap. Near a cable, drag a strand's end dot to bend its leg out to a pin; 
 Lines carry a ligne id (`lid`), so links, branches and stations survive Excalidraw's re-id on paste;
 older drawings are relinked by geometry when opened.
 
+## Install
+
+- **Obsidian, from GitHub:** install the community plugin *BRAT* (Obsidian42 - BRAT), then
+  *BRAT: Add a beta plugin* → `prashnts/obsidian-ligne`. It takes main.js, manifest.json and styles.css
+  from the latest release and can keep them updated. Needs the Excalidraw plugin.
+- **By hand:** unzip `ligne.zip` from a release into `<vault>/.obsidian/plugins/`, enable *ligne*.
+- **Demo:** https://prashnts.github.io/obsidian-ligne/ (opens on a sample drawing; `?sample` to get it
+  back, `?blank` for an empty page; drawings stay in the browser).
+
 ## Obsidian
 
 Needs the Excalidraw plugin; ligne mounts on its drawings and uses its Excalidraw bundle.

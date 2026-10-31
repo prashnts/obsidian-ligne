@@ -549,11 +549,10 @@ export class Ligne {
     const tag = els.find(e => e.customData?.ligne?.kind === 'label' && inside(e))
     if (tag) return { kind: 'tag', group: groupOf(els, tag), line: findLine(els, tag.customData.ligne.line) }
     if (this.mode !== 'line') return
-    for (const l of this.lines()) {
-      if (!cableOf(l.el)) continue
-      const t = this.tips(l.el).find(t => dist(p, t.at) < tol * 0.6)
-      if (t) return { kind: 'leg', el: l.el, end: t.end, j: t.j }
-    }
+    // the nearest leg tip: a cable's tips sit a strand width apart
+    const tip = this.lines().filter(l => cableOf(l.el)).flatMap(l => this.tips(l.el).map(t => ({ ...t, el: l.el })))
+      .map(t => ({ t, d: dist(p, t.at) })).sort((a, b) => a.d - b.d)[0]
+    if (tip && tip.d < tol * 0.6) return { kind: 'leg', el: tip.t.el, end: tip.t.end, j: tip.t.j }
     for (const l of this.lines(true)) {
       const i = l.path.findIndex(q => dist(p, q) < tol)
       if (i >= 0) return { kind: 'point', el: l.el, i }
@@ -634,7 +633,10 @@ export class Ligne {
   /** First stop: on a line's end the line is extended (in its own style, replaced on finish), on a
    *  lane it starts following that line, on a line it branches. */
   private start(p: XY) {
-    const hit = this.snapLine(p), ln = !hit?.end && !hit && this.lane(p)
+    // a free lane spot nearer than a line's end wins: stacked lines start a lane's width apart
+    let hit = this.snapLine(p), ln = (!hit || hit.end) && this.lane(p)
+    if (hit?.end && ln && dist(p, ln.q) < dist(p, hit.q)) hit = undefined
+    else if (hit) ln = undefined
     this.bend = false
     this.lead = undefined
     if (hit?.end) {

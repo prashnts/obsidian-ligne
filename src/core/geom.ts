@@ -161,7 +161,7 @@ export function normals(pts: XY[]): XY[] {
   const legs = pts.slice(1).map((p, i) => left(unit(sub(p, pts[i]))))
   return pts.map((_, i) => {
     const a = legs[Math.max(0, i - 1)] ?? [0, 1], b = legs[Math.min(legs.length - 1, i)] ?? a
-    const m = unit([a[0] + b[0], a[1] + b[1]]), c = Math.max(0.3, dot(m, a))
+    const m = unit([a[0] + b[0], a[1] + b[1]]), c = Math.max(0.5, dot(m, a))
     return [m[0] / c, m[1] / c] as XY
   })
 }
