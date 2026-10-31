@@ -36,7 +36,8 @@ export default class LignePlugin extends Plugin {
       const t = this.tools.get(v)
       if (t && t.api === api && host.contains(t.layer)) continue
       t?.destroy()
-      this.tools.set(v, new Ligne(api, host, lib.convertToExcalidrawElements, () => this.activeView() === v))
+      this.tools.set(v, new Ligne(api, host, lib.convertToExcalidrawElements, () => this.activeView() === v,
+        o => lib.exportToSvg(o)))
     }
     for (const [v, t] of this.tools) if (!seen.has(v)) { t.destroy(); this.tools.delete(v) }
   }

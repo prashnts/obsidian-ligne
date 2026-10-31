@@ -40,6 +40,29 @@ const ICONS: Record<string, string> = {
   undo: '<path d="M8 5L3 10l5 5M3 10h9a5 5 0 0 1 0 10"/>',
   cancel: '<path d="M5 5l10 10M15 5L5 15"/>',
   pick: '<path d="M13 3l4 4-2 2-4-4zM11 5l-7 7v4h4l7-7"/>',
+  grid: '<path d="M3 7h14M3 13h14M7 3v14M13 3v14"/>',
+  iso: '<path d="M10 2v16M3 6l14 8M3 14l14-8"/>',
+  gap: '<path d="M3 7h14M3 13h14M10 8.5v3M8.5 10h3"/>',
+  board: '<rect x="2.5" y="4" width="15" height="12" rx="2"/><circle cx="6.5" cy="8" r=".9"/><circle cx="10" cy="8" r=".9"/><circle cx="13.5" cy="8" r=".9"/><circle cx="6.5" cy="12" r=".9"/><circle cx="10" cy="12" r=".9"/><circle cx="13.5" cy="12" r=".9"/>',
+  R: '<path d="M2 10h3M15 10h3"/><rect x="5" y="7.5" width="10" height="5" rx="2"/>',
+  C: '<path d="M2 10h4M14 10h4"/><ellipse cx="10" cy="10" rx="4" ry="3"/>',
+  D: '<path d="M2 10h4M14 10h4"/><rect x="6" y="7.5" width="8" height="5"/><path d="M12 7.5v5"/>',
+  LED: '<circle cx="10" cy="10" r="5"/><path d="M14 4l2-2M16 6l2-2"/>',
+  J: '<rect x="2" y="7" width="16" height="6" rx="1"/><path d="M5 10h.1M10 10h.1M15 10h.1" stroke-width="2.5"/>',
+  DIP: '<rect x="5" y="3" width="10" height="14" rx="1"/><path d="M2 6h3M2 10h3M2 14h3M15 6h3M15 10h3M15 14h3"/>',
+  TO92: '<path d="M4 13a6 6 0 0 1 12 0z"/><path d="M7 13v4M10 13v4M13 13v4"/>',
+  module: '<rect x="3" y="4" width="14" height="12" rx="2" stroke-dasharray="2 2"/>',
+  text: '<path d="M5 5h10M10 5v11"/>',
+  box: '<rect x="2.5" y="6" width="15" height="8"/><path d="M7 10h6"/>',
+  rounded: '<rect x="2.5" y="6" width="15" height="8" rx="4"/><path d="M7 10h6"/>',
+  netlabel: '<path d="M2 14h16M4 11h8"/>',
+  flag: '<path d="M2 10l4-4h12v8H6z"/>',
+  solid: '<rect x="2.5" y="6" width="15" height="8" rx="4" fill="currentColor"/>',
+  font: '<path d="M4 16l5-12h2l5 12M6.5 11h7"/>',
+  chevron: '<path d="M2 6h11l4 4-4 4H2l4-4z"/>',
+  linetext: '<path d="M2 10h3M15 10h3"/><path d="M7 7h6M10 7v6"/>',
+  svg: '<path d="M4 3h8l4 4v10H4z"/><path d="M7 13l2-4 2 4 2-4"/>',
+  rotate: '<path d="M15 9a5 5 0 1 0-1.5 4.5M15 4v5h-5"/>',
   copy: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M4 13V5a1 1 0 0 1 1-1h8"/>',
 }
 export const icon = (name: string) =>
@@ -64,6 +87,7 @@ export class Panel {
     this.tool.title = this.tool.ariaLabel = 'ligne — metro lines [M]'
     this.tool.innerHTML = `<div class="ToolIcon__icon">${icon('ligne')}<span class="ToolIcon__keybinding">M</span></div>`
     this.tool.onclick = toggle
+    noFocus(this.tool)
     this.box.className = 'Island ligne-panel'
   }
 
@@ -105,7 +129,15 @@ function btn(b: Btn) {
   x.innerHTML = (b.icon ? icon(b.icon) : '') + (sw ? `<span class="sw">${sw}</span>` : '')
     + (b.text ? `<b>${b.text}</b>` : '') + (b.key ? `<kbd>${b.key}</kbd>` : '')
   x.onclick = b.click
+  noFocus(x)
   return x
+}
+
+/** Pressing it leaves the focus where it was (Excalidraw's canvas): no Space / Enter re-clicks,
+ *  keys keep reaching ligne and Excalidraw. */
+export function noFocus(x: HTMLElement) {
+  x.tabIndex = -1
+  x.addEventListener('pointerdown', e => e.preventDefault())
 }
 
 function menu(m: Menu) {

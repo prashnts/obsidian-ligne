@@ -4,8 +4,8 @@
 import { flatWidth, isFlat, type Conn, type WireSet } from './flat.ts'
 import { dist, lengths, normals, octi, pointAt, resample, round, type XY } from './geom.ts'
 
-export type CableStyle = 'round' | 'zigzag' | 'checks' | 'ribbon' | 'ffc'
-export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc']
+export type CableStyle = 'round' | 'zigzag' | 'checks' | 'ribbon' | 'ffc' | 'chevron'
+export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc', 'chevron']
 
 /** Per end, per strand: where its leg goes, relative to that end of the line (null: straight on). */
 export interface Legs { start?: (XY | null)[], end?: (XY | null)[] }
@@ -27,8 +27,19 @@ export const offsets = (n: number, w: number) => Array.from({ length: n }, (_, j
 const amp = (n: number, w: number) => (n - 1) * w / 2 + w / 4
 
 /** Overall width of the cable body. */
-export const cableWidth = (c: Cable, w: number) =>
-  isFlat(c) ? flatWidth(c) : c.style === 'checks' ? c.n * w : 2 * amp(c.n, w) + w
+export const cableWidth = (c: Cable, w: number) => isFlat(c) ? flatWidth(c) : c.style === 'chevron' ? c.pitch
+  : c.style === 'checks' ? c.n * w : 2 * amp(c.n, w) + w
+
+/** A chevron band (git-flow style): `width` wide along the line, a notched tail and a pointed head
+ *  ending at the line's end. One polygon. */
+export function chevronBand(drawn: XY[], width: number): XY[] {
+  const L = lengths(drawn).at(-1) ?? 0, h = Math.min(width / 2, L / 3), body = resample(drawn, 4)
+  const pts = body.pts.filter((_, i) => body.s[i] < L - h)
+  pts.push(pointAt(drawn, L - h).p)
+  const ns = normals(pts), side = (k: number) => pts.map((p, i) => [p[0] + ns[i][0] * k, p[1] + ns[i][1] * k] as XY)
+  const u = pointAt(drawn, 0).u, notch: XY = [drawn[0][0] + u[0] * h, drawn[0][1] + u[1] * h]
+  return [notch, ...side(width / 2), drawn[drawn.length - 1], ...side(-width / 2).reverse(), notch]
+}
 
 const wave = (x: number, zig: boolean) => zig ? 2 / Math.PI * Math.asin(Math.sin(x)) : Math.sin(x)
 const smooth = (x: number) => { const t = Math.max(0, Math.min(1, x)); return t * t * (3 - 2 * t) }
@@ -39,6 +50,8 @@ interface Strand { pts: XY[], s: number[] }
 /** The cable over the (rounded) line `drawn`. Twists straighten out over half a pitch at both
  *  ends, so legs leave side by side. */
 export function cable(drawn: XY[], c: Cable, w: number): { pieces: Piece[], tips: { start: XY[], end: XY[] } } {
+  if (c.style === 'chevron') return { pieces: [{ pts: chevronBand(drawn, c.pitch), color: 0, fill: true, width: 1 }],
+    tips: { start: [drawn[0]], end: [drawn[drawn.length - 1]] } }
   const L = lengths(drawn).at(-1) ?? 0, P = Math.max(4, c.pitch), zig = c.style === 'zigzag'
   const twisted = c.style !== 'checks', A = amp(c.n, w), os = offsets(c.n, w)
   const body = resample(drawn, Math.min(P / 12, 6)), ns = normals(body.pts)

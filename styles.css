@@ -51,3 +51,10 @@
 .ligne-btn b { color: inherit; }
 .ligne-hint { font: 500 12px var(--ui-font, system-ui); fill: #1864ab; stroke: #fff; stroke-width: 4px; paint-order: stroke;
   stroke-linejoin: round; pointer-events: none; }
+.ligne-align { stroke-dasharray: 4 3; }
+.ligne-align.x { stroke-dasharray: none; }
+.ligne-iso { opacity: .35; }
+.ligne-board { stroke-dasharray: 5 4; }
+.ligne-toast { position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 6; padding: 6px 12px;
+  border-radius: 8px; background: #1e1e1e; color: #fff; font: 12px var(--ui-font, system-ui); pointer-events: none; }
+.ligne-input { font-family: 'Cascadia', ui-monospace, monospace; }

@@ -70,24 +70,78 @@ export function station(convert: Convert, o: { at: XY, shape: Shape, color: stri
   return els.map(e => ({ ...e, groupIds: [g] }))         // bound text too
 }
 
-/** Text on a line at `at`, turned to read along it (angle): on the line, with a knockout box in
- *  the paper colour behind it, or beside it, `off` away from its centre. Grouped, text last. */
-export function lineLabel(convert: Convert, o: { at: XY, angle: number, text: string, font: Font, color: string,
-  paper: string, line?: string, on: boolean, off: number }): any[] {
-  // the knockout only breaks the line itself (off: half its width), not its neighbours
-  const g = groupId(), data: LabelData = { kind: 'label', line: o.line, on: o.on }
-  const [t] = make(convert, [{ type: 'text', x: 0, y: 0, text: o.text, ...o.font, strokeColor: o.color }])
-  // beside: moved up the page, across the line
-  const n: XY = [Math.sin(o.angle), -Math.cos(o.angle)], k = o.on ? 0 : o.off + t.height / 2 + 2
-  const c: XY = [o.at[0] + n[0] * k, o.at[1] + n[1] * k]
-  const tag = { groupIds: [g], angle: o.angle, customData: { ligne: data } }
-  const text = { ...t, x: c[0] - t.width / 2, y: c[1] - t.height / 2, ...tag }
-  if (!o.on) return [text]
-  const pw = t.width + t.height * 0.6, ph = Math.min(t.height + 2, 2 * o.off + 2)
-  const [knock] = convert([{ type: 'rectangle', x: c[0] - pw / 2, y: c[1] - ph / 2, width: pw, height: ph,
-    strokeColor: 'transparent', backgroundColor: o.paper, fillStyle: 'solid', strokeWidth: 1, roughness: 0,
-    roundness: { type: 3 }, ...tag }])
-  return [knock, text]
+/** Label types: plain text (on a line: knocked out), a box, a rounded box, KiCad's net label
+ *  (text on the wire) and global label (a flag pointing away). */
+export type LabelType = 'text' | 'box' | 'round' | 'net' | 'flag'
+export const LABELS: LabelType[] = ['text', 'box', 'round', 'net', 'flag']
+/** Excalidraw font families ligne offers: Cascadia (mono), Liberation Sans, Excalifont (hand). */
+export const FONTS = { mono: 3, sans: 9, hand: 5 } as const
+export const SIZES = [12, 16, 20, 28]
+
+/** els turned by angle a about point c, as Excalidraw turns a group: centres move, angles add. */
+export function turned(els: any[], c: XY, a: number): any[] {
+  const cos = Math.cos(a), sin = Math.sin(a)
+  return els.map(e => {
+    // the middle Excalidraw turns an element about: of its points' box, for lines
+    const xs = e.points?.map((p: XY) => p[0]) ?? [0, e.width], ys = e.points?.map((p: XY) => p[1]) ?? [0, e.height]
+    const m: XY = [e.x + (Math.min(...xs) + Math.max(...xs)) / 2, e.y + (Math.min(...ys) + Math.max(...ys)) / 2]
+    const mx = m[0] - c[0], my = m[1] - c[1]
+    const dx = c[0] + mx * cos - my * sin - m[0], dy = c[1] + mx * sin + my * cos - m[1]
+    return { ...e, x: e.x + dx, y: e.y + dy, angle: (((e.angle ?? 0) + a) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) }
+  })
+}
+
+/** els moved so that the middle of el `m` lands on c. */
+const centred = (els: any[], m: any, c: XY) => {
+  const dx = c[0] - (m.x + m.width / 2), dy = c[1] - (m.y + m.height / 2)
+  return els.map(e => ({ ...e, x: e.x + dx, y: e.y + dy }))
+}
+
+/** A label at `at`, turned to read along `angle`, grouped, its text last. On a line (`line`) a text
+ *  label is knocked out of it (`on`) or set beside it, `off` from its centre; boxes sit on it or
+ *  beside it; a net label sits on the wire from `at`; a flag starts at `at` and points away (`dir`).
+ *  `solid`: boxes filled with the colour, the text in the paper colour. Boxes are Excalidraw
+ *  containers, so double-click edits the text, and Excalidraw turns and moves them as one. */
+export function label(convert: Convert, o: { type: LabelType, at: XY, angle: number, text: string, font: Font,
+  color: string, paper: string, line?: string, on: boolean, off: number, solid?: boolean, dir?: 1 | -1 }): any[] {
+  const g = groupId(), data: LabelData = { kind: 'label', line: o.line, on: o.on, type: o.type }
+  const tag = { groupIds: [g], customData: { ligne: data } }, n: XY = [Math.sin(o.angle), -Math.cos(o.angle)]
+  const fg = o.solid ? o.paper : o.type === 'text' ? o.color : '#1e1e1e'
+  const [t] = make(convert, [{ type: 'text', x: 0, y: 0, text: o.text, ...o.font, strokeColor: fg }])
+  const lift = (k: number): XY => [o.at[0] + n[0] * k, o.at[1] + n[1] * k]
+  let els: any[], c: XY
+  if (o.type === 'text' || o.type === 'net') {
+    // net: from the point, a hair above the wire
+    const k = o.type === 'net' ? o.off + t.height / 2 + 1 : o.on && o.line ? 0 : o.line ? o.off + t.height / 2 + 2 : 0
+    c = lift(k)
+    if (o.type === 'net') c = [c[0] + Math.cos(o.angle) * t.width / 2, c[1] + Math.sin(o.angle) * t.width / 2]
+    els = [{ ...t, ...tag }]
+    if (o.type === 'text' && o.on && o.line) {
+      // the knockout only breaks the line itself (off: half its width), not its neighbours
+      const pw = t.width + t.height * 0.6, ph = Math.min(t.height + 2, 2 * o.off + 2)
+      const [knock] = convert([{ type: 'rectangle', x: 0, y: 0, width: pw, height: ph, strokeColor: 'transparent',
+        backgroundColor: o.paper, fillStyle: 'solid', strokeWidth: 1, roughness: 0, roundness: { type: 3 }, ...tag }])
+      els = [...centred([knock], knock, c), ...centred(els, t, c)]
+      return turned(els, c, o.angle)
+    }
+    return turned(centred(els, t, c), c, o.angle)
+  }
+  if (o.type === 'flag') {
+    const dir = o.dir ?? 1, h = t.height + 6, len = t.width + 10 + h / 2
+    const pts: XY[] = [[0, 0], [h / 2, -h / 2], [len, -h / 2], [len, h / 2], [h / 2, h / 2], [0, 0]]
+    const [flag] = make(convert, [{ type: 'line', x: o.at[0], y: o.at[1], points: pts.map(([px, py]) => [px * dir, py]),
+      strokeColor: o.color, backgroundColor: o.solid ? o.color : o.paper, fillStyle: 'solid', strokeWidth: 1.5,
+      roughness: 0, roundness: null, ...tag }])
+    c = [o.at[0] + dir * (h / 2 + len) / 2, o.at[1]]
+    return turned([flag, ...centred([{ ...t, ...tag }], t, c)], o.at, o.angle)
+  }
+  const els2 = make(convert, [{ type: 'rectangle', x: 0, y: 0, strokeColor: o.color,
+    backgroundColor: o.solid ? o.color : o.paper, fillStyle: 'solid', strokeWidth: 1.5, roughness: 0,
+    roundness: o.type === 'round' ? { type: 3 } : null, ...tag,
+    label: { text: o.text, ...o.font, strokeColor: fg } }]).map(e => ({ ...e, ...tag }))
+  const box = els2[0]
+  c = o.on || !o.line ? o.at : lift(o.off + box.height / 2 + 2)
+  return turned(centred(els2, box, c), c, o.angle)
 }
 
 /** Legend: one row per line style (a sample and its name), framed, all grouped.

@@ -16,12 +16,15 @@ export interface Link { of: string, i: number, t: number, d: number }
 export interface LineData {
   kind: 'line' | 'zone', lid?: string, path: XY[], r: number, radii?: number[], links?: (Link | null)[],
   from?: string, to?: string, cable?: Cable, twist?: boolean, ticks?: boolean, arrow?: boolean,
-  own?: string, stack?: string, np?: number, box?: [number, number, number, number],
+  own?: string, stack?: string, np?: number, box?: [number, number, number, number], text?: LineText,
+  grid?: 'octi' | 'iso',
 }
+/** Text repeated along a line, set on it: font family and size, the paper colour knocked out. */
+export interface LineText { text: string, font: number, size: number, paper: string }
 /** customData.ligne of a station dot; its label is the text element in the same group. */
 export interface StationData { kind: 'station', line?: string, shape: Shape }
 /** customData.ligne of a label on a line: its text and the knockout behind it. */
-export interface LabelData { kind: 'label', line?: string, on: boolean }
+export interface LabelData { kind: 'label', line?: string, on: boolean, type?: string }
 
 export interface El {
   id: string, type: string, x: number, y: number, width: number, height: number, isDeleted?: boolean, angle?: number
@@ -29,7 +32,8 @@ export interface El {
 }
 
 export interface Line {
-  id: string, color: string, width: number, dash: string, path: XY[], from?: string, to?: string, cable?: string
+  id: string, color: string, width: number, dash: string, path: XY[], from?: string, to?: string, cable?: string,
+  text?: string
 }
 export interface Zone { id: string, color: string, fill: string, path: XY[] }
 export interface Station {
@@ -70,7 +74,7 @@ export function graph(elements: readonly El[]): Graph {
       ? `/${c.mm ?? .5}mm` : '', ends = size && c?.conn ? `/${c.conn.start ?? 'none'}-${c.conn.end ?? 'none'}` : ''
     const cable = c ? `${c.style}x${c.n}${size}${ends}` : d.twist ? 'roundx2' : undefined
     lines.push({ id, color: e.strokeColor ?? '', width: e.strokeWidth ?? 2, dash: e.strokeStyle ?? 'solid',
-      path: abs(e, d.path), from: d.from, to: d.to, cable })
+      path: abs(e, d.path), from: d.from, to: d.to, cable, text: d.text?.text })
     drawn.set(id, abs(e, e.points ?? d.path))
     lid.set(e.id, id)                                   // stations made before lids refer to element ids
   }
@@ -107,7 +111,7 @@ export function toText(g: Graph): string {
   const out: string[] = []
   for (const l of g.lines) {
     const opt = [l.dash === 'solid' ? '' : l.dash, l.cable && `cable=${l.cable}`, l.from && `from=${l.from}`,
-      l.to && `to=${l.to}`].filter(Boolean).map(v => ' ' + v).join('')
+      l.to && `to=${l.to}`, l.text && `text=${q(l.text)}`].filter(Boolean).map(v => ' ' + v).join('')
     out.push(`line ${l.id} ${l.color} w=${l.width}${opt}`, '  ' + l.path.map(xy).join(' '))
     out.push(...g.stations.filter(s => s.line === l.id).map(st))
     out.push(...g.labels.filter(t => t.line === l.id).map(t => `  label ${q(t.text)} @${xy(t.at)}`))

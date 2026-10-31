@@ -1,6 +1,6 @@
 // The ligne web page: Excalidraw with the ligne tool, the scene kept in localStorage. A first visit
 // (or ?sample) opens the sample drawing, ?blank an empty one.
-import { Excalidraw, convertToExcalidrawElements } from '@excalidraw/excalidraw'
+import { Excalidraw, convertToExcalidrawElements, exportToSvg } from '@excalidraw/excalidraw'
 import { createRoot } from 'react-dom/client'
 import { Ligne } from '../tool.ts'
 
@@ -17,7 +17,7 @@ createRoot(host).render(
   <Excalidraw
     initialData={Promise.resolve(initial).then(d => ({ elements: d.elements, scrollToContent: true,
       appState: { viewBackgroundColor: '#fff' } }))}
-    excalidrawAPI={api => { (window as any).ligne = new Ligne(api, host, convertToExcalidrawElements) }}
+    excalidrawAPI={api => { (window as any).ligne = new Ligne(api, host, convertToExcalidrawElements, undefined, o => exportToSvg(o as any)) }}
     onChange={elements => {
       clearTimeout(timer)
       timer = window.setTimeout(() => localStorage.setItem(KEY, JSON.stringify({ elements })), 500)

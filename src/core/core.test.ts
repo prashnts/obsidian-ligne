@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { graph, toText, type El } from './graph.ts'
 import { beside, carry, concentric, diagFirst, dist, isDiag, nearest, octi, octiPoint, offset, offsetAt, pointAt, resample, round,
-  simplify, snap8, upright, type XY } from './geom.ts'
+  simplify, snap8, snapDir, upright, type XY } from './geom.ts'
 
 const near = (a: XY, b: XY) => assert.ok(dist(a, b) < 1e-6, `${a} ≉ ${b}`)
 const angles = (pts: XY[]) => pts.slice(1).map((p, i) => Math.atan2(p[1] - pts[i][1], p[0] - pts[i][0]))
@@ -104,4 +104,19 @@ test('resample and pointAt', () => {
   assert.deepEqual(r.s.map(Math.round), [0, 3, 7, 10, 13, 17, 20])
   const { p, u } = pointAt([[0, 0], [10, 0], [10, 10]], 15)
   near(p, [10, 5]); near(u, [0, 1])
+})
+
+test('iso: legs at 30°, 90°, 150°', () => {
+  const r3 = Math.sqrt(3)
+  for (const b of [[10, 4], [-7, 20], [3, -9], [-12, -1]] as XY[]) for (const d of [true, false]) {
+    const pts = octi([0, 0], b, d, undefined, 'iso')
+    near(pts.at(-1)!, b)
+    for (const a of angles(pts)) {
+      const k = (a - Math.PI / 6) / (Math.PI / 3)
+      assert.ok(Math.abs(k - Math.round(k)) < 1e-9, `${b} ${a}`)
+    }
+  }
+  near(snapDir([0, 0], [10, 6], 'iso'), [r3 / 2 * (10 * r3 / 2 + 3), (10 * r3 / 2 + 3) / 2])
+  const q = octiPoint([10, 3], [0, 0], [20, 0], 'iso')
+  for (const a of angles([[0, 0], q, [20, 0]])) assert.ok(Math.abs(Math.abs(a) - Math.PI / 6) < 1e-9)
 })

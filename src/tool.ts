@@ -4,7 +4,7 @@
 // Click to place stops; between them the line runs octilinear (one straight + one 45° leg), drawn
 // rounded as it will be. Which leg comes first follows the way the pointer leaves the last stop;
 // B swaps. Shift: free leg snapped to 8 directions. Click the last stop again (or double-click,
-// Enter) to end; end on the first stop to close the shape into a zone, sent to the back.
+// Enter) to end; end on the first stop to close the shape into a zone, under the lines it crosses.
 // Backspace (or Ctrl/Cmd-Z) undoes a stop, Esc cancels (leaves when idle).
 // Start on a line to branch off it, on its end to extend it; drag a waypoint to move it.
 // Beside a line the pointer snaps to its free lanes (touching parallels): along a lane the new line
@@ -13,20 +13,24 @@
 // Double-click a line to select just it, even inside a stack.
 // Colour, width, dash, sloppiness, fill, arrowheads come from Excalidraw's own style panel (ligne
 // keeps its line or arrow tool selected meanwhile), remembered for ligne apart from other shapes.
-// T makes cables: twisted (round, zigzag) or colour checks, legs at their ends dragged into place;
-// flat ones (ribbon, FFC) true to size, folded over with B, split at an end, ending in connectors.
-// S switches to stations, L to labels on lines. G copies the graph as text.
+// W makes cables: twisted (round, zigzag), colour checks or a chevron band (git-flow style); flat
+// ones (ribbon, FFC) true to size, folded over with B, split at an end, ending in connectors.
+// Stops line up with what is drawn (guides), with the grid (G: square, isometric) and with a
+// perfboard's holes. S stations, T labels (text, boxes, net labels), X perfboards and parts.
 import { STYLES, cableWidth, type Cable, type CableStyle } from './core/cable.ts'
 import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, endOf, flatTips, isFlat, swatch, wire, wirePitch,
   type Conn } from './core/flat.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
-  pointAt, round, same, snap8, unit, upright, type XY } from './core/geom.ts'
+  pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
 import { graph, toText, type Link, type Shape } from './core/graph.ts'
+import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { laneAt, type Track } from './core/snap.ts'
+import { PARTS, PART_NAMES, clicks, board, holeAt, part, pinsAt, pinsOf, pitchOf, seat, span,
+  type PartKind } from './board.ts'
 import { bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, lidOf, lineEls, pathOf, radiiOf, relink, replace,
-  resized, restack, specOf, stale, type Spec } from './lines.ts'
-import { DOT, PAPER, bump, fontOf, fromState, groupId, legend, lineLabel, make, paper, station, styleOf, toState,
-  type Convert, type Style } from './make.ts'
+  onLanes, resized, restack, specOf, stale, type Spec } from './lines.ts'
+import { DOT, FONTS, LABELS, PAPER, SIZES, bump, fromState, groupId, label, legend, paper, station, styleOf, toState,
+  turned, type Convert, type Font, type LabelType, type Style } from './make.ts'
 import { Panel, type Btn, type Item, type Menu } from './ui.ts'
 
 export type { Convert }
@@ -38,10 +42,15 @@ export interface Api {
   updateScene(scene: { elements?: readonly any[], appState?: any, captureUpdate?: any }): void
   onChange(cb: (elements: readonly any[], state: any) => void): () => void
   setActiveTool(tool: { type: string }): void
+  getFiles?(): any
 }
+/** Excalidraw's exportToSvg, from whichever bundle the host ships. */
+export type ExportSvg = (o: { elements: readonly any[], appState: any, files: any }) => Promise<SVGSVGElement>
 
 const NS = 'http://www.w3.org/2000/svg'
 const SNAP = 10                                   // px on screen: ends, first/last stop, waypoints
+const GUIDE = 6                                   // px on screen: onto a guide
+const NEAR = 240                                  // px on screen: diagonal guides reach this far
 const ON = 6                                      // px on screen: onto a lane
 const WIDE = 14                                   // px on screen: onto a lane the leg runs along
 const JOG = 10                                    // px on screen: shorter legs are a near miss, dropped
@@ -51,33 +60,45 @@ const DOUBLE = 450                                // ms: presses closer in time 
 const SAVED = 'ligne-style', OPTS = 'ligne-opts'
 const DEFAULT: Partial<Style> = { strokeWidth: 4, roughness: 0, strokeStyle: 'solid', opacity: 100 }
 const SHAPES: Record<string, Shape> = { '1': 'stop', '2': 'interchange', '3': 'commit', '4': 'net' }
-type Mode = 'line' | 'station' | 'label' | 'select'
+type Mode = 'line' | 'station' | 'label' | 'board' | 'select'
+type GridMode = 'off' | 'square' | 'iso'
+const GRIDS: GridMode[] = ['off', 'square', 'iso']
+const PREFIX: Record<PartKind, string> = { board: '', R: 'R', C: 'C', D: 'D', LED: 'LED', J: 'J', DIP: 'U', TO92: 'Q',
+  module: 'M' }
+/** Keys Excalidraw has with Ctrl / Cmd, forwarded to it when the focus is on ligne's own layer. */
+const FORWARD = 'zyxcvdag'
 
 const HELP: [string, string][] = [
+  ['V / Esc · L · S · T · X', 'select · lines · stations · labels · perfboard (again: back to lines)'],
   ['click', 'stop · on a line: branch (peels off, trunk style) · on its end: extend (same style)'],
   ['beside a line', 'its free lanes: joins and leaves at 45° in a curve, follows it bend for bend'],
+  ['- / =', 'lane gap: set the line a little further out · select mode: the selected lines'],
+  ['guides', 'stops line up with waypoints, stations and shapes (dashed) · over a perfboard: its holes'],
+  ['G', 'grid: off, square (Excalidraw\'s), isometric (legs at 30°, 90°, 150°)'],
   ['bends', 'the first leg goes the way you leave the stop · B swaps'],
   ['Ctrl / Cmd held · N', 'no snapping: place anywhere'],
   ['[ / ] · slider', 'bend radius (0: sharp), shown as you draw; idle: the selected lines'],
   ['click last stop', 'end the line (also double-click, Enter)'],
-  ['click first stop', 'close into a zone, at the back'],
-  ['drag', 'waypoint (both legs stay at 45°) · cable leg tip · station · label'],
+  ['click first stop', 'close into a zone, under the lines it crosses'],
+  ['drag', 'waypoint (both legs stay on the grid) · cable leg tip · station · label'],
   ['double-click a line', 'select just it, even in a stack'],
-  ['Shift / ⇧ button', 'free leg, 8 directions'],
+  ['Shift / ⇧ button', 'free leg, along the grid\'s directions'],
   ['Backspace / Ctrl-Z · Esc', 'undo a stop · cancel'], ['Alt-click / I', "take a line's style"],
-  ['T · ⇧T', 'cable on/off · round, zigzag, checks (2nd colour: Excalidraw background), ribbon, FFC'],
-  ['ribbon / FFC', 'true size × scale · W wire colours: mono (white stripe), Qwiic, Grove, rainbow · E gauge / pitch'],
+  ['W · ⇧W', 'cable on/off · round, zigzag, checks (2nd colour: Excalidraw background), ribbon, FFC, chevron'],
+  ['ribbon / FFC', 'true size × scale · wire colours in the popover · E gauge / pitch'],
   ['B · ⇧B (flat)', 'fold at the next corner: turns over, the back shows · bend the other way'],
   ['C', 'connector: none, Dupont, JST PH, SH, MX 1.25 (FFC: ZIF) · over a cable end: that end only'],
   ['flat cable end', 'click a wire: a bundle of it goes on (click another: up to it; all: the cable) · ⇧-click: the cable'],
   ['', 'drag a wire: fan it out · click a fanned wire: a plain line goes on from it'],
-  ['Esc · V', 'idle: select (Excalidraw\'s selection, ligne\'s keys act on it) · Esc again: back to drawing'],
+  ['⇧T', 'text along the line, repeated (the line being drawn, else the selected ones)'],
   ['A / D', 'arrowheads · direction chevrons (the way it was drawn)'],
-  ['style', "Excalidraw's panel: colour, width, dash, arrowheads, font"],
+  ['style', "Excalidraw's panel: colour, width, dash, arrowheads"],
   ['S · 1–4 · B', 'stations: stop, interchange, commit, net flag · labels in a box'],
-  ['L · B', 'labels on lines: click a line, type · on it / beside it'],
+  ['T · 1–5 · B · F', 'labels: text, box, rounded, net label, flag · on a line / beside it · solid'],
+  ['X · 1–9', 'perfboard (drag its size), resistor, cap, diode, LED, header, DIP, TO-92, module: click holes'],
+  ['R / ⇧R', 'select mode: turn the selection 90° / 45° (parts about pin 1)'],
   ['K', 'legend (again: rebuild)'], ['P / ⇧P · O', 'A5 / A6 sheet · landscape'],
-  ['G', 'copy the graph as text'], ['M', 'ligne on / off'], ['?', 'this help'],
+  ['⇧C', 'copy the selection (else all) as SVG'], ['M', 'ligne on / off'], ['?', 'this help'],
 ]
 
 /** A stop: its bend radius, on another line's lane where, whether a flat cable folds there. */
@@ -87,10 +108,10 @@ interface Lane { el: any, path: XY[], radii: number[], i: number, t: number, d: 
 /** A ligne line in the scene: element, waypoints, radii, rounded centre line, body width. */
 interface Ln { el: any, path: XY[], radii: number[], drawn: XY[], width: number }
 
-/** Whether leg i of path runs along an axis (else it is diagonal). */
-const straight = (path: XY[], i: number) => {
+/** Whether leg i of path is a "straight" one of the grid (see isDiag). */
+const straight = (path: XY[], i: number, grid: Grid = 'octi') => {
   const a = path[Math.min(i, path.length - 2)], b = path[Math.min(i, path.length - 2) + 1]
-  return Math.abs(a[0] - b[0]) < 1e-6 || Math.abs(a[1] - b[1]) < 1e-6
+  return !isDiag([b[0] - a[0], b[1] - a[1]], grid)
 }
 /** A line's style for Excalidraw's panel: a flat cable's fill and outline width are its own. */
 const lookOf = (e: any): Partial<Style> => {
@@ -126,6 +147,18 @@ export class Ligne {
   private sel: string[] = []                       // lines selected when ligne was turned on
   picking = false                                  // next click takes a line's style
   r = 24
+  spread = 0                                       // lane gap beyond touching
+  gridMode: GridMode = 'off'
+  labelType: LabelType = 'text'
+  solid = false                                    // labels: filled with the colour
+  font: keyof typeof FONTS = 'mono'
+  size = 16
+  partKind: PartKind = 'board'
+  scale = 2                                        // perfboard: true size ×
+  lineText = ''                                    // repeated along the lines drawn next
+  private pin?: XY                                 // a part's first hole
+  private guides: Guide[] = []                     // shown with the pointer
+  private refCache?: { els: readonly any[], pts: XY[] }
   private pts: XY[] = []
   private meta: Meta[] = []
   private cursor?: XY
@@ -136,7 +169,7 @@ export class Ligne {
   private fork?: { u: XY, back: number, fwd: number } // branching: the trunk's leg at the first stop
   private split?: { el: any, end: 'start' | 'end', q0: number, q1: number, pick?: number[] } // wires by position
   private startBack = false                        // extending a cable at its start that starts back up
-  private press?: { at: XY, grab?: Grab, dragging?: boolean, start: any[] }
+  private press?: { at: XY, grab?: Grab, dragging?: boolean, start: any[], refs?: XY[] }
   private outside?: Partial<Style>                 // Excalidraw's style while ligne is active
   private tool = ''
   private looks = new Map<string, string>()         // line id → its style last seen
@@ -151,7 +184,7 @@ export class Ligne {
 
   /** `focused`: whether keys are for this canvas (several may be open, e.g. Obsidian panes). */
   constructor(readonly api: Api, private host: HTMLElement, private convert: Convert,
-    private focused: () => boolean = () => true) {
+    private focused: () => boolean = () => true, private exportSvg?: ExportSvg) {
     host.style.position ||= 'relative'
     this.layer = document.createElementNS(NS, 'svg')
     this.layer.classList.add('ligne-layer')
@@ -185,6 +218,9 @@ export class Ligne {
 
   /** The Excalidraw tool held while active: its style panel is ligne's. */
   private held() { return this.mode === 'select' ? 'selection' : this.arrow ? 'arrow' : 'line' }
+  /** The leg directions lines are drawn in. */
+  private gridDirs(): Grid { return this.gridMode === 'iso' ? 'iso' : 'octi' }
+  private labelFont(): Font { return { fontFamily: FONTS[this.font], fontSize: this.size } }
 
   /** On: ligne's remembered style goes into Excalidraw's style panel; off: Excalidraw's comes back. */
   setActive(on: boolean) {
@@ -195,6 +231,9 @@ export class Ligne {
     const s = this.api.getAppState()
     if (on) {
       this.outside = fromState(s)
+      // Excalidraw's own smart guides for its shapes while ligne is on
+      this.snapWas = !!s.objectsSnapModeEnabled
+      this.api.updateScene({ appState: { objectsSnapModeEnabled: true } })
       this.sel = Object.keys(s.selectedElementIds ?? {})
         .filter(id => this.live().some(e => e.id === id && isLine(e, true)))
       const first = this.live().find(e => e.id === this.sel[0])
@@ -207,7 +246,7 @@ export class Ligne {
       this.reset()
       if (this.outside) {
         localStorage.setItem(SAVED, JSON.stringify(fromState(s)))
-        this.api.updateScene({ appState: toState(this.outside) })
+        this.api.updateScene({ appState: { ...toState(this.outside), objectsSnapModeEnabled: this.snapWas } })
         this.outside = undefined
         if (s.activeTool?.type === this.held()) this.api.setActiveTool({ type: 'selection' })
       }
@@ -220,10 +259,12 @@ export class Ligne {
   private changed(s: any) {
     this.panel.mount()
     if (!this.press?.dragging) this.follow()
-    const fix = (els: readonly any[]) => resized(els) ?? relink(els)
+    // parts are put back on their holes once Excalidraw is done moving or turning them
+    const busy = (st: any) => st.selectedElementsAreBeingDragged || st.isRotating || st.isResizing
+    const fix = (els: readonly any[]) => resized(els) ?? relink(els) ?? (busy(this.api.getAppState()) ? undefined : seat(els))
     if (fix(this.api.getSceneElements())) setTimeout(() => {
       const els = fix(this.api.getSceneElements())
-      if (els) this.api.updateScene({ elements: els, captureUpdate: 'NEVER' })
+      if (els) this.put(els, 'NEVER')
     })
     // a scene update may drop the focus (to the body): take it back, else Excalidraw hears no keys
     if (this.active) setTimeout(() => {
@@ -267,7 +308,7 @@ export class Ligne {
         const now = scene.find(x => x.id === e.id)
         if (now) scene = replace(scene, lineEls(this.convert, specOf(now), styleOf(now), now))
       }
-      this.api.updateScene({ captureUpdate: 'NEVER', elements: scene })
+      this.put(scene, 'NEVER')
     })
   }
 
@@ -288,6 +329,30 @@ export class Ligne {
   }
   private live() { return this.api.getSceneElements().filter(e => !e.isDeleted) }
 
+  /** The scene becomes els. Elements changed from what is on the canvas get a version past it (a
+   *  drag rebuilds every frame from the scene at the press: same versions, so Excalidraw's history
+   *  saw no change and undo took back the step before); elements left out stay, deleted. */
+  private put(els: readonly any[], capture: string) {
+    // Excalidraw 0.18 leaves elements with uncommitted (EVENTUALLY) changes out of an IMMEDIATELY
+    // capture: the scene from before them goes back quietly first, then the end state is one step
+    let now = this.api.getSceneElements()
+    if (capture === 'EVENTUALLY') this.base ??= now
+    else if (this.base) {
+      if (capture === 'IMMEDIATELY') this.api.updateScene({ elements: this.base, captureUpdate: 'NEVER' })
+      now = this.api.getSceneElements()
+      this.base = undefined
+    }
+    const byId = new Map(now.map(e => [e.id, e])), seen = new Set<string>()
+    const out = els.map(e => {
+      seen.add(e.id)
+      const c = byId.get(e.id)
+      return c && c !== e && e.version <= c.version
+        ? { ...e, version: c.version + 1, versionNonce: Math.random() * 2 ** 31 | 0, updated: Date.now() } : e
+    })
+    for (const c of now) if (!seen.has(c.id) && !c.isDeleted) out.push(bump(c, { isDeleted: true }))
+    this.api.updateScene({ elements: out, captureUpdate: capture })
+  }
+
   /** ligne lines (and zones) in the scene, bar those edited outside ligne. Cached per scene. */
   private lines(zones = false): Ln[] {
     const els = this.api.getSceneElements()
@@ -297,6 +362,46 @@ export class Ligne {
   }
 
   private snapping() { return this.snap && !this.mod }
+
+  /** Points stops line up with: ligne waypoints, stations, the middles of other shapes (not the
+   *  holes and parts of perfboards, nor ligne's extras). Cached per scene. */
+  private refs(): XY[] {
+    const els = this.api.getSceneElements()
+    if (this.refCache?.els === els) return this.refCache.pts
+    // perfboards and parts: their holes and pins are snapped to by holeAt
+    const boards = new Set(els.filter(e => ['board', 'part'].includes(e.customData?.ligne?.kind)).map(e => e.groupIds?.[0]))
+    const pts: XY[] = []
+    for (const e of els) {
+      const k = e.customData?.ligne?.kind
+      if (e.isDeleted || boards.has(e.groupIds?.[0]) || e.containerId) continue
+      if (isLine(e, true) && !stale(e)) pts.push(...pathOf(e))
+      else if (k === 'station' && e.type !== 'line') pts.push([e.x + e.width / 2, e.y + e.height / 2])
+      else if (!k && e.type !== 'text' && e.type !== 'freedraw')
+        pts.push(...(e.points && !e.angle ? e.points.map((q: XY) => [q[0] + e.x, q[1] + e.y] as XY)
+          : [[e.x + e.width / 2, e.y + e.height / 2] as XY]))
+    }
+    this.refCache = { els, pts }
+    return pts
+  }
+
+  /** Where a free stop at c goes: a perfboard's hole under it, else the grid's lattice point, else
+   *  lined up with what is drawn (guides). */
+  private placed(c: XY, refs?: XY[]): { q: XY, guides: Guide[] } {
+    if (!this.snapping()) return { q: c, guides: [] }
+    const hole = holeAt(this.live(), c)
+    if (hole) return { q: hole.q, guides: [] }
+    if (this.gridMode !== 'off') return { q: lattice(c, this.gridMode, this.gridSize()), guides: [] }
+    return align(c, refs ?? [...this.refs(), ...this.pts.slice(0, -1)], GUIDE / this.zoom(), this.gridDirs(), NEAR / this.zoom())
+  }
+  private gridSize() { return this.api.getAppState().gridSize || 20 }
+
+  /** G: grid off, square (Excalidraw's own, shown by it), isometric (shown by ligne). */
+  private setGrid(g: GridMode) {
+    this.gridMode = g
+    this.api.updateScene({ appState: { gridModeEnabled: g === 'square' } })
+    this.save()
+    this.panelUI()
+  }
   /** Width of what is being drawn: the cable's body, else the stroke. */
   private width() {
     const w = this.api.getAppState().currentItemStrokeWidth
@@ -325,7 +430,7 @@ export class Ligne {
     if (!this.snapping()) return
     // never onto a lane of the line being extended
     const z = this.zoom(), ls = this.lines().filter(l => l.el.id !== this.editing?.id)
-    const me = { width: this.width(), cable: this.twist }
+    const me = { width: this.width(), cable: this.twist, extra: this.spread }
     const hit = laneAt(ls.map(l => bodyOf(l.el)), p, me, { tol: ON / z, wide: WIDE / z, dir, leave: WIDE / z,
       track: this.pts.length ? this.track : undefined })
     this.track = hit && this.pts.length ? { of: hit.id, d: hit.d, i: hit.i } : undefined
@@ -347,10 +452,10 @@ export class Ligne {
     if (!c || !last || this.mode !== 'line') return { pts: this.pts, meta: this.meta }
     free ||= this.free
     if (this.fork && n === 1) return this.branch(c, free)
-    const z = this.zoom(), inDir = lastDir(this.pts), prev = this.meta[n - 1].link
+    const z = this.zoom(), inDir = lastDir(this.pts), prev = this.meta[n - 1].link, g = this.gridDirs()
     const closing = this.closing(c), hit = closing ? undefined : this.snapLine(c)
     // the way the leg would run, for lanes along it
-    const rough = octi(last, c, this.order(last, c, prev)), dir = unit([rough.at(-1)![0] - rough.at(-2)![0],
+    const rough = octi(last, c, this.order(last, c, prev), undefined, g), dir = unit([rough.at(-1)![0] - rough.at(-2)![0],
       rough.at(-1)![1] - rough.at(-2)![1]])
     const ln = closing || hit && !hit.end ? undefined : this.lane(c, dir)
     let legs: XY[], meta: Meta[]
@@ -362,14 +467,16 @@ export class Ligne {
       legs = [...ks.map(k => offsetAt(path, k, 0, d)), ln.q]
       meta = [...ks.map(k => ({ r: conc[k], link: { of, i: k, t: 0, d } })), this.onLane(ln)]
     } else {
-      const to = closing ? this.pts[0] : ln?.q ?? hit?.q ?? c, diag = this.order(last, to, prev, ln)
-      legs = free ? [last, snap8(last, to)] : octi(last, to, diag)
+      const spot = closing || ln || hit ? undefined : this.placed(c)
+      this.guides = spot?.guides ?? []
+      const to = closing ? this.pts[0] : ln?.q ?? hit?.q ?? spot!.q, diag = this.order(last, to, prev, ln)
+      legs = free ? [last, snapDir(last, to, g)] : octi(last, to, diag, undefined, g)
       // never double straight back on the incoming leg
       const first = legs.length === 3 && unit([legs[1][0] - last[0], legs[1][1] - last[1]])
-      if (!free && inDir && first && first[0] * inDir[0] + first[1] * inDir[1] < -0.5) legs = octi(last, to, !diag)
+      if (!free && inDir && first && first[0] * inDir[0] + first[1] * inDir[1] < -0.5) legs = octi(last, to, !diag, undefined, g)
       // a near miss: a leg too short to see is a jog off the flow, so the stop lines up instead
       const short = legs.length === 3 && Math.min(dist(legs[0], legs[1]), dist(legs[1], legs[2])) * z < JOG
-      if (!free && to === c && short) legs = [last, snap8(last, c)]
+      if (!free && spot?.q === c && short) legs = [last, snapDir(last, c, g)]
       legs = legs.slice(1)
       meta = legs.map((_, i) => i === legs.length - 1 && ln && !free ? this.onLane(ln) : { r: this.r, link: null })
     }
@@ -389,9 +496,9 @@ export class Ligne {
    *  stop; else off a lane at 45° to it (it peels off), onto one with the 45° leg last (it curves
    *  on), or the order turning least. B swaps. */
   private order(last: XY, to: XY, prev: Link | null, ln?: Lane) {
-    const away = prev && findLine(this.live(), prev.of)
-    const auto = this.lead ?? (away ? straight(pathOf(away), prev.i) : ln ? !straight(ln.path, ln.i)
-      : diagFirst(last, to, lastDir(this.pts)))
+    const away = prev && findLine(this.live(), prev.of), g = this.gridDirs()
+    const auto = this.lead ?? (away ? straight(pathOf(away), prev.i, g) : ln ? !straight(ln.path, ln.i, g)
+      : diagFirst(last, to, lastDir(this.pts), g))
     return auto !== this.bend
   }
 
@@ -402,9 +509,10 @@ export class Ligne {
     const ahead = (c[0] - j[0]) * u[0] + (c[1] - j[1]) * u[1] >= 0, s = ahead ? 1 : -1
     const dir: XY = [u[0] * s, u[1] * s], b = Math.min(this.r, ahead ? back : fwd)
     const tail: XY = [j[0] - dir[0] * b, j[1] - dir[1] * b]
-    const to = this.snapLine(c)?.q ?? c
+    const to = this.snapLine(c)?.q ?? this.placed(c).q, g = this.gridDirs()
     // it leaves at the fork: first the leg at 45° to the trunk (B swaps)
-    const legs = (free ? [j, snap8(j, to)] : octi(j, to, straight([[0, 0], u], 0) !== this.bend)).slice(1)
+    const legs = (free ? [j, snapDir(j, to, g)] : octi(j, to, straight([[0, 0], u], 0, g) !== this.bend, undefined, g))
+      .slice(1)
     const r = { r: this.r, link: null }
     return { pts: [tail, j, ...legs], meta: [r, r, ...legs.map(() => r)] }
   }
@@ -457,10 +565,20 @@ export class Ligne {
       return c
     }
     const n = this.pts.length, c = this.cursor, kids: SVGElement[] = []
+    if (this.gridMode === 'iso') {
+      // the isometric lattice, faint, over the view (not when too dense to read)
+      const size = this.gridSize(), x0 = -s.scrollX, y0 = -s.scrollY
+      if (size * z >= 8) kids.push(...isoLines([x0, y0, x0 + s.width / z, y0 + s.height / z], size)
+        .map(([a, b]) => path([a, b], 'ligne-iso', 1, '#adb5bd')))
+    }
+    if (!this.press?.dragging) this.guides = []
     if (this.mode === 'line') {
       // the line as it will be: rounded, cable wide, the leg to the pointer included
       const r = this.route(free)
       kids.push(path(round(r.pts, r.meta.map(m => m.r)), 'ligne-live', this.width() * z))
+      // bends that line up with what is drawn
+      if (n) for (let i = n; i < r.pts.length - 1; i++)
+        this.guides.push(...aligned(r.pts[i], this.refs(), 0.75 / z, this.gridDirs(), NEAR / z))
       kids.push(...r.pts.flatMap((q, i) => i < n || r.meta[i].fold
         ? [dot(q, r.meta[i].fold ? 4 : 2.5, 'ligne-stop' + (r.meta[i].fold ? ' fold' : ''))] : []))
     }
@@ -488,9 +606,23 @@ export class Ligne {
     }
     // cable leg tips near the pointer: drag them into place
     if (c && !n && this.mode === 'line') for (const l of this.lines()) {
-      if (!cableOf(l.el) || nearest(l.drawn, c).d > 60 / z) continue
+      if (!cableOf(l.el) || cableOf(l.el)!.style === 'chevron' || nearest(l.drawn, c).d > 60 / z) continue
       for (const t of this.tips(l.el)) kids.push(dot(t.at, 4, 'ligne-snap tip' + (g?.kind === 'leg'
         && g.el === l.el && g.end === t.end && g.j === t.j ? ' end' : '')))
+    }
+    if (c && !n && this.mode === 'line' && !this.press && !this.lineAt(c) && !this.snapLine(c)) {
+      const at = this.placed(c)
+      this.guides = at.guides
+      if (at.q !== c) kids.push(dot(at.q, 3.5, 'ligne-snap'))
+    }
+    if (this.mode === 'board' && c) kids.push(...this.boardPreview(c, path, dot))
+    for (const [a, b] of this.guides) {
+      // past both ends a little, the reference point crossed
+      const u = unit([b[0] - a[0], b[1] - a[1]]), e = 12 / z
+      kids.push(path([[a[0] - u[0] * e, a[1] - u[1] * e], [b[0] + u[0] * e, b[1] + u[1] * e]], 'ligne-align', 1, '#e64980'))
+      const k = 3 / z
+      kids.push(path([[a[0] - k, a[1] - k], [a[0] + k, a[1] + k]], 'ligne-align x', 1.5, '#e64980'),
+        path([[a[0] - k, a[1] + k], [a[0] + k, a[1] - k]], 'ligne-align x', 1.5, '#e64980'))
     }
     // what a click does here, by the pointer
     const hint = c && this.press?.dragging !== true ? this.intent(c) : undefined
@@ -503,10 +635,47 @@ export class Ligne {
     this.layer.replaceChildren(...kids)
   }
 
+  /** Perfboard mode: the board being dragged out (its size), or the part from its first hole to
+   *  the hole under the pointer. */
+  private boardPreview(c: XY, path: (pts: XY[], cls: string, w?: number, color?: string) => SVGElement,
+    dot: (q: XY, r: number, cls: string) => SVGElement): SVGElement[] {
+    const P = pitchOf(this.scale), z = this.zoom(), out: SVGElement[] = []
+    const hole = holeAt(this.live(), c)?.q
+    if (this.partKind === 'board') {
+      if (!this.press) return out
+      const b = span(this.press.at, c, P), [x, y] = b.at, w = (b.cols - 1) * P, h = (b.rows - 1) * P, m = P * 0.9
+      out.push(path([[x - m, y - m], [x + w + m, y - m], [x + w + m, y + h + m], [x - m, y + h + m], [x - m, y - m]],
+        'ligne-board', 1.5, '#b9a77a'))
+      this.hintText = `${b.cols} × ${b.rows} holes · ${(b.cols * 2.54).toFixed(1)} × ${(b.rows * 2.54).toFixed(1)} mm`
+      return out
+    }
+    const P2 = holeAt(this.live(), c)?.board.customData.ligne.pitch ?? P
+    if (this.pin) {
+      const pins = pinsOf(this.partKind, this.pin, hole ?? c, P2)
+      out.push(path(this.partKind === 'module' ? [pins[0], [pins[1][0], pins[0][1]], pins[1], [pins[0][0], pins[1][1]],
+        pins[0]] : pins, 'ligne-board', 2, '#1971c2'))
+      out.push(...pins.map(q => dot(q, 3.5, 'ligne-snap')))
+      if (this.partKind === 'J' || this.partKind === 'DIP') this.hintText = `${pins.length} pins`
+    } else if (hole) out.push(dot(hole, Math.max(3, P2 * z * 0.25), 'ligne-snap'))
+    return out
+  }
+  private hintText?: string
+  private base?: readonly any[]                    // the scene before uncommitted (EVENTUALLY) updates
+  private snapWas = false
+
   /** What a click at p would do, in a few words. */
   private intent(p: XY): string | undefined {
+    if (this.mode === 'board') {
+      const t = this.hintText
+      this.hintText = undefined
+      if (t) return t
+      const name = PART_NAMES[this.partKind]
+      if (this.partKind === 'board') return 'drag: a perfboard · click: 30 × 20'
+      return this.pin ? `click: ${name}, last ${this.partKind === 'DIP' ? 'pin of the row' : 'hole'}`
+        : `${name}: click ${clicks(this.partKind) === 1 ? 'its middle hole' : 'its first hole'}`
+    }
+    if (this.mode === 'label') return this.lineAt(p) ? `${this.labelType} label on the line` : `${this.labelType} label`
     if (this.mode === 'station') return this.snapLine(p)?.el ? 'station on the line' : 'station'
-    if (this.mode === 'label') return this.lineAt(p) ? 'label on the line' : undefined
     if (this.mode !== 'line') return
     if (this.pts.length) {
       const sp = this.split, t = sp && this.pts.length === 2 && this.wireAt(p)
@@ -554,7 +723,7 @@ export class Ligne {
     // the way the pointer leaves the last stop picks the leg order; back at the stop, it picks again
     const last = this.pts[this.pts.length - 1], z = this.zoom()
     if (last && dist(c, last) * z < LEAD / 3) this.lead = undefined
-    else if (last && this.lead === undefined && dist(c, last) * z > LEAD) this.lead = isDiag([c[0] - last[0], c[1] - last[1]])
+    else if (last && this.lead === undefined && dist(c, last) * z > LEAD) this.lead = isDiag([c[0] - last[0], c[1] - last[1]], this.gridDirs())
     const pr = this.press
     if (pr?.grab && (pr.dragging || dist(pr.at, c) * z > DRAG)) {
       pr.dragging = true
@@ -565,11 +734,14 @@ export class Ligne {
 
   private up(e: PointerEvent) {
     const pr = this.press
-    this.press = undefined
     if (!pr) return
+    // the drag's last step still reads the press (refs it lined up with)
     if (pr.dragging) this.drag(pr.grab!, this.scene(e), e.shiftKey, 'IMMEDIATELY')
-    else if (this.mode === 'station') this.station(pr.at)
+    this.press = undefined
+    if (pr.dragging) return this.draw()
+    if (this.mode === 'station') this.station(pr.at)
     else if (this.mode === 'label') this.label(pr.at)
+    else if (this.mode === 'board') this.placePart(pr.at, this.scene(e))
     else this.start(pr.at, e.shiftKey)
     this.draw()
   }
@@ -635,7 +807,7 @@ export class Ligne {
     if (tag) return { kind: 'tag', group: groupOf(els, tag), line: findLine(els, tag.customData.ligne.line) }
     if (this.mode !== 'line') return
     // the nearest leg tip: a cable's tips sit a strand width apart
-    const tip = this.lines().filter(l => cableOf(l.el) && cableOf(l.el)!.style !== 'ffc')
+    const tip = this.lines().filter(l => cableOf(l.el) && !['ffc', 'chevron'].includes(cableOf(l.el)!.style))
       .flatMap(l => this.tips(l.el).map(t => ({ ...t, el: l.el })))
       .map(t => ({ t, d: dist(p, t.at) })).sort((a, b) => a.d - b.d)[0]
     if (tip && tip.d < tol * 0.6) return { kind: 'leg', el: tip.t.el, end: tip.t.end, j: tip.t.j }
@@ -656,7 +828,11 @@ export class Ligne {
         const zone = s.kind === 'zone', i = g.i
         const prev = i > 0 ? s.path[i - 1] : zone ? s.path[n - 2] : undefined
         const next = i < n - 1 ? s.path[i + 1] : zone ? s.path[1] : undefined
-        s.path[i] = free ? p : octiPoint(p, prev, next)
+        // lined up with what is drawn, the line's own other waypoints included
+        const refs = this.press!.refs ??= [...this.refs().filter(r => !same(r, s.path[i])), ...s.path.filter((_, k) => k !== i)]
+        const q = this.placed(p, refs)
+        this.guides = q.guides
+        s.path[i] = free ? q.q : octiPoint(q.q, prev, next, s.grid ?? 'octi')
         if (zone && (i === 0 || i === n - 1)) s.path[n - 1 - i] = s.path[i]
         if (s.links) s.links[i] = null
       } else {
@@ -693,7 +869,7 @@ export class Ligne {
       const moved = new Map(g.group.map(e => byId.get(e.id)).map(e => [e.id, bump(e, { x: e.x + d[0], y: e.y + d[1] })]))
       scene = start.map(e => moved.get(e.id) ?? e)
     }
-    this.api.updateScene({ elements: scene, captureUpdate: capture })
+    this.put(scene, capture)
   }
 
   /** Alt-click (or the pick button): the clicked line's style (and cable) becomes ligne's. */
@@ -734,7 +910,7 @@ export class Ligne {
       this.pts = [ln.q]; this.meta = [this.onLane(ln)]
       this.track = { of: lidOf(ln.el), d: ln.d, i: ln.i }
     } else {
-      this.pts = [hit?.q ?? p]; this.meta = [{ r: this.r, link: null, fold: this.flat() && this.flip }]
+      this.pts = [hit?.q ?? this.placed(p).q]; this.meta = [{ r: this.r, link: null, fold: this.flat() && this.flip }]
       this.flip = false
       this.from = hit?.el && lidOf(hit.el)
       if (hit?.el) {
@@ -792,7 +968,7 @@ export class Ligne {
       f(s)
       scene = restack(this.convert, replace(scene, lineEls(this.convert, s, styleOf(el), el)), id)
     }
-    this.api.updateScene({ elements: scene, captureUpdate: capture })
+    this.put(scene, capture)
     return true
   }
 
@@ -828,7 +1004,9 @@ export class Ligne {
     const was = this.cable, flat = style === 'ribbon' || style === 'ffc', fits = isFlat(was) === flat
     const conn: Conn = 'none'
     this.twist = true
-    this.cabling({ style, n: fits ? was.n : style === 'ffc' ? 20 : flat ? 6 : 2,
+    if (style === 'chevron') return this.cabling({ style, n: 1, pitch: was.style === 'chevron' ? was.pitch : 24 })
+    this.cabling({ style, n: fits && was.style !== 'chevron' ? was.n : style === 'ffc' ? 20 : flat ? 6 : 2,
+      ...(was.style === 'chevron' ? { pitch: 16 } : {}),
       ...(flat ? { awg: was.awg ?? 28, mm: was.mm ?? .5, set: was.set ?? 'mono', scale: was.scale ?? 1 } : {}),
       ...(flat && was.style !== style ? { conn: { start: conn, end: conn } } : {}) })
   }
@@ -861,7 +1039,7 @@ export class Ligne {
     const s = specOf(at.el)
     s.cable = { ...c, conn: { ...c.conn, [at.end]: next(c.conn?.[at.end]) } }
     const scene = replace(this.api.getSceneElements(), lineEls(this.convert, s, styleOf(at.el), at.el))
-    this.api.updateScene({ elements: restack(this.convert, scene, at.el.id), captureUpdate: 'IMMEDIATELY' })
+    this.put(restack(this.convert, scene, at.el.id), 'IMMEDIATELY')
   }
 
   /** The wire of a flat cable's end at p: line, end, wire, its position across (from the left). */
@@ -932,7 +1110,9 @@ export class Ligne {
   }
 
   private save() {
-    localStorage.setItem(OPTS, JSON.stringify({ r: this.r, cable: this.cable, onLine: this.onLine }))
+    const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, lineText } = this
+    localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
+      scale, lineText }))
   }
 
   private undoStop() {
@@ -943,14 +1123,19 @@ export class Ligne {
 
   private key(e: KeyboardEvent) {
     const t = e.target as HTMLElement
-    if (t.isContentEditable || /INPUT|TEXTAREA/.test(t.tagName) || !this.focused()) return
+    // only where text is typed: a slider or button keeps ligne's and Excalidraw's keys working
+    const typing = t.isContentEditable || /TEXTAREA|SELECT/.test(t.tagName)
+      || t.tagName === 'INPUT' && !/^(range|checkbox|radio|button|color)$/.test((t as HTMLInputElement).type)
+    if (typing || !this.focused()) return
     const stop = () => { e.preventDefault(); e.stopImmediatePropagation() }
     if (e.ctrlKey || e.metaKey) {
       // Ctrl/Cmd-Z while drawing takes back a stop; all else is Excalidraw's (undo, copy, …)
       if (this.active && this.pts.length && e.key.toLowerCase() === 'z' && !e.shiftKey) { this.undoStop(); stop() }
-      // focus left Excalidraw (clicks on ligne's layer): hand the shortcut to it
+      // focus on ligne's layer (or nowhere): Excalidraw's own shortcuts are handed to it; the host's
+      // (Obsidian's Ctrl-P, …) are left alone
       const box = this.container()
-      if (this.active && box && !box.contains(t)) {
+      if (this.active && box && !box.contains(t) && FORWARD.includes(e.key.toLowerCase())
+        && (t === document.body || this.host.contains(t))) {
         stop()
         box.focus({ preventScroll: true })
         box.dispatchEvent(new KeyboardEvent('keydown', e))
@@ -969,11 +1154,11 @@ export class Ligne {
       if (Object.keys(this.api.getAppState().selectedElementIds ?? {}).length)
         this.api.updateScene({ appState: { selectedElementIds: {}, selectedGroupIds: {}, editingGroupId: null } })
       else this.setMode(this.drawn)
-    } else if (k === 'Escape') this.pts.length ? this.reset() : this.setMode('select')
+    } else if (k === 'Escape') this.pts.length || this.pin ? this.reset() : this.setMode('select')
     else if (k === 'm') this.setActive(false)
     else if (this.mode === 'select' && (k === 'Backspace' || k === 'Delete')) return
     else if ((k === 'Backspace' || k === 'Delete') && !this.pts.length) return  // Excalidraw deletes the selection
-    else if (k in SHAPES && this.mode === 'station') { this.shape = SHAPES[k]; this.panelUI() }
+    else if (/^[1-9]$/.test(k) && this.digit(+k)) this.panelUI()
     else if (act) act()
     else return
     stop()
@@ -982,39 +1167,56 @@ export class Ligne {
     this.draw(e.shiftKey)
   }
 
+  /** 1–9: the station shape, label type or part of the mode; false where they mean nothing. */
+  private digit(n: number) {
+    if (this.mode === 'station' && SHAPES[n]) this.shape = SHAPES[n]
+    else if (this.mode === 'label' && LABELS[n - 1]) this.labelType = LABELS[n - 1]
+    else if (this.mode === 'board' && PARTS[n - 1]) { this.partKind = PARTS[n - 1]; this.pin = undefined }
+    else return false
+    this.save()
+    return true
+  }
+
   /** Key → action; the panel buttons run the same. */
   private actions: Record<string, () => void> = {
     Enter: () => this.finish(), Backspace: () => this.undoStop(), Delete: () => this.undoStop(),
     b: () => this.mode === 'station' ? this.toggle('boxed') : this.mode === 'label' ? this.toggle('onLine')
       : this.toggle(this.flat() ? 'flip' : 'bend'),
     B: () => this.toggle('bend'),
+    l: () => this.setMode('line'),
     s: () => this.setMode(this.mode === 'station' ? 'line' : 'station'),
-    l: () => this.setMode(this.mode === 'label' ? 'line' : 'label'),
+    t: () => this.setMode(this.mode === 'label' ? 'line' : 'label'),
+    x: () => this.setMode(this.mode === 'board' ? 'line' : 'board'),
+    v: () => this.setMode('select'),
+    T: () => this.askText(),
     o: () => this.toggle('landscape'), '?': () => this.toggle('help'),
     h: () => this.toggle('help'), i: () => this.toggle('picking'), d: () => this.toggle('ticks'),
-    t: () => { this.twist = !this.twist; this.cabling() },
-    T: () => this.restyle(STYLES[(STYLES.indexOf(this.cable.style) + 1) % STYLES.length]),
-    c: () => this.connect(),
-    w: () => this.cabling({ set: SETS[(SETS.indexOf(this.cable.set ?? 'mono') + 1) % SETS.length] }),
+    f: () => this.toggle('solid'),
+    w: () => { this.twist = !this.twist; this.cabling() },
+    W: () => this.restyle(STYLES[(STYLES.indexOf(this.cable.style) + 1) % STYLES.length]),
+    c: () => this.connect(), C: () => { this.copySvg() },
     e: () => this.cabling(this.cable.style === 'ffc'
       ? { mm: FFC_PITCH[(FFC_PITCH.indexOf(this.cable.mm ?? .5) + 1) % FFC_PITCH.length] }
       : { awg: GAUGES[(GAUGES.indexOf(this.cable.awg ?? 28) + 1) % GAUGES.length] }),
     a: () => { this.toggle('arrow'); this.api.setActiveTool({ type: this.held() }) },
     n: () => this.toggle('snap'),
+    g: () => this.setGrid(GRIDS[(GRIDS.indexOf(this.gridMode) + 1) % GRIDS.length]),
     '[': () => { this.radius(this.r - 4, 'IMMEDIATELY'); this.panelUI() },
     ']': () => { this.radius(this.r + 4, 'IMMEDIATELY'); this.panelUI() },
-    g: () => this.copy(), k: () => this.legend(), p: () => this.paper('A5'), P: () => this.paper('A6'),
-    v: () => this.setMode('select'),
+    '-': () => this.gap(-2), '=': () => this.gap(2), '+': () => this.gap(2),
+    r: () => this.rotate(Math.PI / 2), R: () => this.rotate(Math.PI / 4),
+    k: () => this.legend(), p: () => this.paper('A5'), P: () => this.paper('A6'),
   }
   private toggle(k: 'boxed' | 'landscape' | 'help' | 'picking' | 'ticks' | 'arrow' | 'free' | 'snap' | 'bend' | 'onLine'
-    | 'flip') {
+    | 'flip' | 'solid') {
     this[k] = !this[k]
     if (k === 'ticks') this.applySel(s => { s.ticks = this.ticks }, 'IMMEDIATELY')
-    if (k === 'onLine') this.save()
+    if (k === 'onLine' || k === 'solid') this.save()
     this.panelUI()
   }
 
-  /** Lines, stations, labels; or select: Excalidraw's selection tool, ligne's keys and panel still on. */
+  /** Lines, stations, labels, perfboards; or select: Excalidraw's selection tool, ligne's keys and
+   *  panel still on. */
   private setMode(m: Mode) {
     this.reset()
     if (m === 'select' && this.mode !== 'select') this.drawn = this.mode
@@ -1025,19 +1227,94 @@ export class Ligne {
   }
   private reset() {
     this.pts = []; this.meta = []
-    this.from = this.editing = this.fork = this.lead = this.track = this.split = undefined
+    this.from = this.editing = this.fork = this.lead = this.track = this.split = this.pin = undefined
     this.bend = this.flip = this.startBack = false
+    this.guides = []
     this.draw()
+  }
+
+  /** - / =: in select mode, the selected lines' lanes move out (or in) by k; else the lane gap of
+   *  lines drawn next. */
+  private gap(k: number) {
+    const sel = this.mode === 'select' && this.applySel(s => {
+      if (!s.links?.some(Boolean)) return
+      s.links = s.links.map(l => l && { ...l, d: Math.sign(l.d) * Math.max(0, Math.abs(l.d) + k) })
+      onLanes(this.api.getSceneElements(), s)
+    }, 'IMMEDIATELY')
+    if (!sel) this.spread = Math.max(0, Math.min(40, this.spread + k))
+    this.save()
+    this.panelUI()
+  }
+
+  /** R: the selection turned by a, group by group: a part about its pin 1, else about its middle.
+   *  ligne's lines stay (their waypoints would no longer describe them). */
+  private rotate(a: number) {
+    const s = this.api.getAppState(), ids = new Set(Object.keys(s.selectedElementIds ?? {}))
+    const els = this.live(), drawn = new Set(['line', 'zone', 'strand', 'tick', 'rep'])
+    const pick = els.filter(e => (ids.has(e.id) || ids.has(e.containerId)) && !drawn.has(e.customData?.ligne?.kind))
+    if (!pick.length) return
+    const groups = new Map<string, any[]>()
+    for (const e of pick) {
+      const g = e.groupIds?.at(-1) ?? e.containerId ?? e.id
+      groups.set(g, [...groups.get(g) ?? [], e])
+    }
+    const moved = new Map<string, any>()
+    for (const g of groups.values()) {
+      const body = g.find(e => e.customData?.ligne?.kind === 'part')
+      const xs = g.flatMap(e => [e.x, e.x + e.width]), ys = g.flatMap(e => [e.y, e.y + e.height])
+      const c: XY = body ? pinsAt(body)[0] : [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2]
+      for (const e of turned(g, c, a)) moved.set(e.id, bump(e, { x: e.x, y: e.y, angle: e.angle }))
+    }
+    this.put(this.api.getSceneElements().map(e => moved.get(e.id) ?? e), 'IMMEDIATELY')
+  }
+
+  /** ⇧T: text repeated along the line being drawn and the next ones, else along the selected lines;
+   *  empty: none. */
+  private askText() {
+    const s = this.api.getAppState(), z = s.zoom.value
+    const at: XY = this.cursor ?? [s.width / 2 / z - s.scrollX, s.height / 2 / z - s.scrollY]
+    this.ask(at, text => {
+      this.lineText = text
+      this.applySel(sp => { sp.text = text ? this.textSpec() : undefined }, 'IMMEDIATELY')
+      this.save()
+      this.panelUI()
+    }, this.lineText, true)
+  }
+  private textSpec() {
+    return { text: this.lineText, font: FONTS[this.font], size: Math.min(this.size, 14),
+      paper: this.api.getAppState().viewBackgroundColor ?? '#ffffff' }
+  }
+
+  /** ⇧C: the selection (else everything) as SVG on the clipboard, as Excalidraw exports it. */
+  private async copySvg() {
+    if (!this.exportSvg) return this.flash('SVG export not available here')
+    const s = this.api.getAppState(), ids = new Set(Object.keys(s.selectedElementIds ?? {})), live = this.live()
+    const elements = ids.size ? live.filter(e => ids.has(e.id) || ids.has(e.containerId)) : live
+    const svg = await this.exportSvg({ elements, files: this.api.getFiles?.() ?? {}, appState: { exportBackground: true,
+      viewBackgroundColor: s.viewBackgroundColor ?? '#ffffff', exportWithDarkMode: false, exportEmbedScene: false } })
+    const text = new XMLSerializer().serializeToString(svg)
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }),
+        'image/svg+xml': new Blob([text], { type: 'image/svg+xml' }) })])
+    } catch { await navigator.clipboard.writeText(text) }
+    this.flash(`SVG copied: ${ids.size ? 'the selection' : 'everything'}`)
+  }
+
+  /** A short note under the panel. */
+  private flash(text: string) {
+    const t = Object.assign(document.createElement('div'), { className: 'ligne-toast', textContent: text })
+    this.host.append(t)
+    setTimeout(() => t.remove(), 1800)
   }
 
   graph() { return graph(this.api.getSceneElements()) }
   text() { return toText(this.graph()) }
 
-  private copy() { navigator.clipboard?.writeText(this.text()) }
+  private copy() { navigator.clipboard?.writeText(this.text()).then(() => this.flash('graph copied as text')) }
 
   private add(els: any[], back = false) {
     const all = this.api.getSceneElements()
-    this.api.updateScene({ elements: back ? [...els, ...all] : [...all, ...els], captureUpdate: 'IMMEDIATELY' })
+    this.put(back ? [...els, ...all] : [...all, ...els], 'IMMEDIATELY')
   }
 
   /** Drops a station on the nearest line (or where clicked); a net flag points away from a line end. */
@@ -1046,29 +1323,56 @@ export class Ligne {
     const tip = hit?.end === 'end' ? hit.path.slice(-2) : hit?.end === 'start' ? hit.path.slice(0, 2).reverse() : []
     this.add(station(this.convert, {
       at: hit?.q ?? p, shape: this.shape, line: hit?.el && lidOf(hit.el), boxed: this.boxed,
-      font: fontOf(this.api.getAppState()),
+      font: this.labelFont(),
       color: hit?.el?.strokeColor ?? this.api.getAppState().currentItemStrokeColor,
       text: this.shape === 'net' ? `NET${n}` : `S${n}`, dir: tip.length && tip[1][0] < tip[0][0] ? -1 : 1,
     }))
   }
 
-  /** Text on the line at p: asks for it in place, then sets it along the line. */
+  /** A label at p, of the type picked: on the line there (along it), else where clicked; a flag at a
+   *  line's end points away from it. Asks for the text in place. */
   private label(p: XY) {
-    const l = this.lineAt(p)
-    if (!l) return
-    const n = nearest(l.drawn, p), a = l.drawn[n.i], b = l.drawn[n.i + 1] ?? a
-    const angle = upright(unit([b[0] - a[0], b[1] - a[1]])), s = this.api.getAppState()
-    this.ask(n.q, text => this.add(lineLabel(this.convert, { at: n.q, angle, text, font: fontOf(s),
-      color: l.el.strokeColor, paper: s.viewBackgroundColor ?? '#ffffff', line: lidOf(l.el), on: this.onLine,
-      off: l.width / 2 })))
+    const s = this.api.getAppState(), l = this.lineAt(p), end = this.labelType === 'flag' ? this.snapLine(p) : undefined
+    let at = this.placed(p).q, angle = 0, dir: 1 | -1 = 1
+    if (end?.end && end.el) {
+      const [a, b] = end.end === 'end' ? end.path.slice(-2) : end.path.slice(0, 2).reverse(), v = unit([b[0] - a[0], b[1] - a[1]])
+      at = b; angle = upright(v); dir = Math.cos(angle) * v[0] + Math.sin(angle) * v[1] > 0 ? 1 : -1
+    } else if (l) {
+      const n = nearest(l.drawn, p), a = l.drawn[n.i], b = l.drawn[n.i + 1] ?? a
+      at = n.q; angle = upright(unit([b[0] - a[0], b[1] - a[1]]))
+    }
+    const line = end?.el ?? l?.el
+    this.ask(at, text => this.add(label(this.convert, { type: this.labelType, at, angle, text, font: this.labelFont(),
+      color: line?.strokeColor ?? s.currentItemStrokeColor, paper: s.viewBackgroundColor ?? '#ffffff',
+      line: line && lidOf(line), on: this.onLine, off: line ? bodyWidth(line) / 2 : 0, solid: this.solid, dir })))
+  }
+
+  /** Perfboard mode: a board dragged out from p to `to` (a click: 30 x 20 holes), at the back; or a
+   *  part from its first hole (a click) to its last (the next click), then its ref and value. */
+  private placePart(p: XY, to: XY) {
+    const P0 = pitchOf(this.scale), kind = this.partKind
+    if (kind === 'board') {
+      const b = dist(p, to) * this.zoom() > DRAG ? span(p, to, P0) : { at: p, cols: 30, rows: 20 }
+      return this.add(board(this.convert, b.at, b.cols, b.rows, P0, this.labelFont()), true)
+    }
+    const h = holeAt(this.live(), p), q = h?.q ?? p, P = h?.board.customData.ligne.pitch ?? P0
+    if (!this.pin && clicks(kind) === 2) { this.pin = q; return }
+    const pins = pinsOf(kind, this.pin ?? q, q, P)
+    this.pin = undefined
+    const n = this.live().filter(e => e.customData?.ligne?.kind === 'part' && e.customData.ligne.part === kind).length
+    this.ask(pins[0], text => {
+      const [ref = '', ...value] = text.split(/\s+/)
+      this.add(part(this.convert, kind, pins, P, ref, value.join(' '), this.labelFont()))
+    }, `${PREFIX[kind]}${n + 1} `)
   }
 
   /** A small text box at scene point p; Enter (or leaving it) gives its text, Esc drops it. */
-  private ask(p: XY, done: (text: string) => void) {
+  private ask(p: XY, done: (text: string) => void, value = '', empty = false) {
     this.input?.remove()
     const i = this.input = document.createElement('input'), [x, y] = this.screen(p)
     i.className = 'ligne-input'
     i.placeholder = 'label'
+    i.value = value
     Object.assign(i.style, { left: `${x}px`, top: `${y}px` })
     let over = false
     const end = (keep: boolean) => {
@@ -1076,7 +1380,7 @@ export class Ligne {
       over = true
       i.remove()
       if (this.input === i) this.input = undefined
-      if (keep && i.value.trim()) done(i.value.trim())
+      if (keep && (empty || i.value.trim())) done(i.value.trim())
       this.container()?.focus({ preventScroll: true })
     }
     i.onkeydown = e => {
@@ -1120,13 +1424,24 @@ export class Ligne {
     }
     const spec: Spec = { kind: closed ? 'zone' : 'line', lid: d?.lid, path: pts, radii: meta.map(m => m.r),
       links: meta.map(m => m.link), r: this.r, from: this.from, to: endHit ? lidOf(endHit.el) : d?.to, stack,
-      cable: this.twist ? this.made(meta, d?.cable) : undefined, ticks: this.ticks, arrow: this.arrow, own: d?.own }
+      cable: this.twist ? this.made(meta, d?.cable) : undefined, ticks: this.ticks, arrow: this.arrow, own: d?.own,
+      grid: this.gridDirs() === 'iso' ? 'iso' : undefined, text: this.lineText ? this.textSpec() : d?.text }
     const els = lineEls(this.convert, spec, fromState(this.api.getAppState()), base)
     if (base) {
       const shift = ed.reversed ? pts.length - ed.n : 0
       if (shift) scene = scene.map(e => this.shiftLinks(e, lidOf(base), shift))
       scene = restack(this.convert, replace(scene, els), base.id)
-    } else scene = closed ? [...els, ...scene] : [...scene, ...els]
+    } else if (closed) {
+      // a zone goes under the lines it crosses, else on top (not behind boards, images, frames)
+      const box = (ps: XY[]) => [Math.min(...ps.map(p => p[0])), Math.min(...ps.map(p => p[1])),
+        Math.max(...ps.map(p => p[0])), Math.max(...ps.map(p => p[1]))]
+      const [x0, y0, x1, y1] = box(pts), k = scene.findIndex(e => {
+        if (!isLine(e) || stale(e)) return false
+        const [a0, b0, a1, b1] = box(pathOf(e))
+        return a0 <= x1 && a1 >= x0 && b0 <= y1 && b1 >= y0
+      })
+      scene = k < 0 ? [...scene, ...els] : [...scene.slice(0, k), ...els, ...scene.slice(k)]
+    } else scene = [...scene, ...els]
     const sp = this.split, parent = sp && scene.find(e => e.id === sp.el.id), pc = parent && cableOf(parent)
     if (sp && pc?.conn?.[sp.end] && pc.conn[sp.end] !== 'none') {
       // a split end has no connector of its own
@@ -1134,7 +1449,7 @@ export class Ligne {
       s.cable = { ...pc, conn: { ...pc.conn, [sp.end]: 'none' } }
       scene = replace(scene, lineEls(this.convert, s, styleOf(parent), parent))
     }
-    this.api.updateScene({ elements: scene, captureUpdate: 'IMMEDIATELY' })
+    this.put(scene, 'IMMEDIATELY')
     this.reset()
   }
 
@@ -1178,7 +1493,7 @@ export class Ligne {
     const at: XY = box ? [box.x, box.y] : [60 / z - s.scrollX, 100 / z - s.scrollY]
     const gone = new Set(els.filter(e => old.some(o => e.groupIds?.includes(o.groupIds?.at(-1)))).map(e => e.id))
     const all = this.api.getSceneElements().map(e => gone.has(e.id) ? bump(e, { isDeleted: true }) : e)
-    this.api.updateScene({ elements: [...all, ...legend(this.convert, at, fontOf(s), [...rows.values()])],
+    this.api.updateScene({ elements: [...all, ...legend(this.convert, at, this.labelFont(), [...rows.values()])],
       captureUpdate: 'IMMEDIATELY' })
   }
 
@@ -1196,7 +1511,8 @@ export class Ligne {
       value: String(value) })
     const val = Object.assign(document.createElement('span'), { textContent: String(value) })
     input.oninput = () => { set(+input.value, 'EVENTUALLY'); val.textContent = input.value }
-    input.onchange = () => set(+input.value, 'IMMEDIATELY')
+    // let go: the focus goes back to the canvas, so keys go on working there
+    input.onchange = () => { set(+input.value, 'IMMEDIATELY'); input.blur(); this.container()?.focus({ preventScroll: true }) }
     r.append(input, val)
     return r
   }
@@ -1210,10 +1526,12 @@ export class Ligne {
       on: v === now, click: () => set(v), ...more(v) }))
     const kind = this.twist ? c.style : 'plain'
     const types = ['plain', ...STYLES] as const
-    const rows: Menu['rows'] = [{ label: 'Cable', items: types.map(k => ({ icon: k === 'plain' ? 'line' : k,
-      title: k === 'plain' ? 'No cable: a plain line [T]' : `${k} [⇧T]`, on: k === kind,
+    const rows: Menu['rows'] = [{ label: 'Body', items: types.map(k => ({ icon: k === 'plain' ? 'line' : k,
+      title: k === 'plain' ? 'A plain line [W]' : `${k} [⇧W]`, on: k === kind,
       click: () => k === 'plain' ? (this.twist = false, this.cabling()) : this.restyle(k) })) }]
-    if (this.twist && !isFlat(c)) rows.push(
+    if (this.twist && c.style === 'chevron') rows.push({ label: 'Width', items: [this.range('Band width', 6, 80, c.pitch,
+      (v, cap) => this.cabling({ pitch: v }, cap, false))] })
+    else if (this.twist && !isFlat(c)) rows.push(
       { label: 'Strands', items: opt('Strands', [2, 3, 4], c.n, n => this.cabling({ n })) },
       { label: 'Twist', items: [this.range('Twist / check length', 4, 80, c.pitch,
         (v, cap) => this.cabling({ pitch: v }, cap, false))] })
@@ -1222,7 +1540,7 @@ export class Ligne {
       ffc ? { label: 'Pitch', items: opt('FFC pitch [E]', FFC_PITCH, c.mm ?? .5, mm => this.cabling({ mm }), v => `${v} mm`) }
         : { label: 'Gauge', items: opt('Silicone wire [E]', GAUGES, c.awg ?? 28, awg => this.cabling({ awg }),
           v => `${v} AWG`) },
-      ...(ffc ? [] : [{ label: 'Colours', items: opt('Wire colours [W]', SETS, c.set ?? 'mono', set => this.cabling({ set }),
+      ...(ffc ? [] : [{ label: 'Colours', items: opt('Wire colours', SETS, c.set ?? 'mono', set => this.cabling({ set }),
         v => v, v => ({ swatch: swatch(v, this.api.getAppState().currentItemStrokeColor) })) }]),
       { label: 'Size', items: opt('True size ×', [1, 2, 4], c.scale ?? 1, scale => this.cabling({ scale }), v => `×${v}`) },
       { label: 'Ends', items: opt('Connector at both ends [C; over an end: that end]', CONNS[ffc ? 'ffc' : 'ribbon'],
@@ -1230,33 +1548,48 @@ export class Ligne {
       { label: 'Draw', items: [
         { icon: 'fold', text: 'fold', title: 'Fold at the next corner: the cable turns over', key: 'B', on: this.flip,
           click: A.b }] })
-    const cable: Menu = { icon: this.twist ? c.style : 'twist', title: 'Cable', key: 'T', on: this.twist,
-      open: this.menu === 'cable', rows, click: () => this.openMenu('cable') }
-    const sheets: Menu = { icon: 'sheets', title: 'Sheets and legend', open: this.menu === 'sheets',
+    const cable: Menu = { icon: this.twist ? c.style : 'twist', title: 'Line body: plain, cable, chevron band', key: 'W',
+      on: this.twist, open: this.menu === 'cable', rows, click: () => this.openMenu('cable') }
+    const font: Menu = { icon: 'font', title: 'Label font and size', open: this.menu === 'font',
+      click: () => this.openMenu('font'), rows: [
+        { label: 'Font', items: opt('Font', Object.keys(FONTS) as (keyof typeof FONTS)[], this.font,
+          f => { this.font = f; this.save(); this.panelUI() }) },
+        { label: 'Size', items: opt('Size', SIZES, this.size, v => { this.size = v; this.save(); this.panelUI() }) }] }
+    const sheets: Menu = { icon: 'sheets', title: 'Sheets, legend, export', open: this.menu === 'sheets',
       click: () => this.openMenu('sheets'), rows: [
         { label: 'Sheet', items: [{ icon: 'paper', title: 'A5 sheet', key: 'P', text: 'A5', click: A.p },
           { icon: 'paper', title: 'A6 sheet', key: '⇧P', text: 'A6', click: A.P },
           { icon: 'landscape', title: 'Sheets in landscape', key: 'O', on: this.landscape, click: A.o }] },
-        { label: 'Legend', items: [{ icon: 'legend', title: 'Legend (again: rebuild)', key: 'K', click: A.k }] }] }
+        { label: 'Legend', items: [{ icon: 'legend', title: 'Legend (again: rebuild)', key: 'K', click: A.k }] },
+        { label: 'Copy', items: [{ icon: 'svg', text: 'SVG', title: 'Copy the selection (else all) as SVG', key: '⇧C',
+          click: A.C }, { icon: 'copy', text: 'graph', title: 'Copy the graph as text: lines, stations, labels',
+          click: () => this.copy() }] }] }
+    const grid: Btn = { icon: this.gridMode === 'iso' ? 'iso' : 'grid', key: 'G', on: this.gridMode !== 'off',
+      title: `Grid: ${this.gridMode} (off, square, isometric)`, click: A.g }
     const items: Item[] = [
-      { icon: 'select', title: 'Select (Excalidraw\'s selection, ligne stays on)', key: 'Esc', on: mode === 'select',
+      { icon: 'select', title: 'Select (Excalidraw\'s selection, ligne stays on; Esc too)', key: 'V', on: mode === 'select',
         click: () => this.setMode('select') },
-      { icon: 'line', title: 'Lines', key: 'S', on: mode === 'line', click: () => this.setMode('line') },
+      { icon: 'line', title: 'Lines', key: 'L', on: mode === 'line', click: () => this.setMode('line') },
       { icon: 'station', title: 'Stations', key: 'S', on: mode === 'station', click: () => this.setMode('station') },
-      { icon: 'label', title: 'Labels on lines', key: 'L', on: mode === 'label', click: () => this.setMode('label') },
+      { icon: 'label', title: 'Labels', key: 'T', on: mode === 'label', click: () => this.setMode('label') },
+      { icon: 'board', title: 'Perfboard and parts', key: 'X', on: mode === 'board', click: () => this.setMode('board') },
       'sep',
       ...(mode === 'line' ? [
-        { icon: 'free', title: 'Free legs, 8 directions (or hold Shift)', key: '⇧', on: this.free,
+        { icon: 'free', title: 'Free legs, along the grid\'s directions (or hold Shift)', key: '⇧', on: this.free,
           click: () => this.toggle('free') },
-        { icon: 'magnet', title: 'Snap to lines and lanes (hold Ctrl/Cmd: off)', key: 'N', on: this.snap, click: A.n },
+        { icon: 'magnet', title: 'Snap: lines, lanes, guides, holes (hold Ctrl/Cmd: off)', key: 'N', on: this.snap,
+          click: A.n },
+        grid,
         { icon: 'bend', title: 'Bend the other way (the other leg first)', key: this.flat() ? '⇧B' : 'B', on: this.bend,
           click: A.B }, radius,
+        this.range('Lane gap: a line beside another, set a little further out [- =]', 0, 40, this.spread,
+          v => { this.spread = v; this.save() }),
         'sep' as const,
         { icon: 'arrow', title: 'Arrowheads (Excalidraw\'s arrow style)', key: 'A', on: this.arrow, click: A.a },
         { icon: 'ticks', title: 'Direction chevrons, the way the line was drawn', key: 'D', on: this.ticks, click: A.d },
         cable,
-        ...(this.flat() ? [{ icon: 'fold', title: 'Fold at the next corner: the cable turns over', key: 'B', on: this.flip,
-          click: A.b }] : []),
+        { icon: 'linetext', title: `Text along the line, repeated${this.lineText ? `: ${this.lineText}` : ''}`, key: '⇧T',
+          on: !!this.lineText, click: A.T },
         'sep' as const,
         { icon: 'finish', title: 'End the line', key: '⏎', click: A.Enter },
         { icon: 'undo', title: 'Undo a stop', key: '⌫', click: A.Backspace },
@@ -1266,12 +1599,27 @@ export class Ligne {
           on: this.shape === v, click: () => { this.shape = v; this.panelUI() } })),
         { icon: 'boxed', title: 'Labels in a box', key: 'B', on: this.boxed, click: A.b },
       ] : mode === 'label' ? [
+        ...LABELS.map((t, i) => ({ icon: { text: 'text', box: 'box', round: 'rounded', net: 'netlabel', flag: 'flag' }[t],
+          title: { text: 'Text', box: 'Box', round: 'Rounded box', net: 'Net label (KiCad local): on the wire',
+            flag: 'Flag (KiCad global label): at a line end, pointing away' }[t], key: String(i + 1),
+          on: this.labelType === t, click: () => { this.digit(i + 1); this.panelUI() } })),
+        'sep' as const,
         { icon: 'boxed', title: this.onLine ? 'On the line (click: beside it)' : 'Beside the line (click: on it)',
           key: 'B', on: this.onLine, click: A.b },
-      ] : [cable]),
+        { icon: 'solid', title: 'Solid: filled with the line colour', key: 'F', on: this.solid, click: A.f },
+        font, grid,
+      ] : mode === 'board' ? [
+        ...PARTS.map((k, i) => ({ icon: k, title: PART_NAMES[k][0].toUpperCase() + PART_NAMES[k].slice(1), key: String(i + 1),
+          on: this.partKind === k, click: () => { this.digit(i + 1); this.panelUI() } })),
+        'sep' as const,
+        ...opt('Perfboard: 2.54 mm true size ×', [1, 2, 4], this.scale, v => { this.scale = v; this.save(); this.panelUI() },
+          v => `×${v}`),
+        font,
+      ] : [cable, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
+        { icon: 'gap', title: 'Move the selected lines out on their lanes (- in)', key: '=', click: A['='] }]),
       { icon: 'pick', title: 'Take a line\'s style (or Alt-click)', key: 'I', on: this.picking, click: A.i },
       'sep', sheets,
-      { icon: 'copy', title: 'Copy the graph as text', key: 'G', click: A.g },
+      { icon: 'svg', title: 'Copy the selection (else all) as SVG', key: '⇧C', click: A.C },
       { icon: 'help', title: 'Help', key: '?', on: this.help, click: A['?'] },
     ]
     this.panel.render(this.active, items, this.help ? HELP : undefined)

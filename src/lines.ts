@@ -4,10 +4,10 @@
 // lid and groups, never by element id alone: Excalidraw re-ids elements on paste and duplicate.
 import { cable, cableWidth, chevrons, type Cable, type Piece } from './core/cable.ts'
 import { flat, isFlat } from './core/flat.ts'
-import { carry, concentric, dist, offsetAt, round, type XY } from './core/geom.ts'
+import { carry, concentric, dist, offsetAt, round, unit, upright, type XY } from './core/geom.ts'
 import type { LineData } from './core/graph.ts'
 import type { Body } from './core/snap.ts'
-import { bump, groupId, shortId, styleOf, type Convert, type Style } from './make.ts'
+import { bump, groupId, make, shortId, styleOf, turned, type Convert, type Style } from './make.ts'
 
 /** A line to build: like its customData, with absolute waypoints and a radius for each. */
 export type Spec = Omit<LineData, 'path' | 'radii' | 'box' | 'np' | 'twist'> & { path: XY[], radii: number[] }
@@ -81,7 +81,7 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   // a flat cable's colours are its own: the main element is its first band, outlined in the line colour
   const fl = isFlat(c), pieces: Piece[] = !c ? [{ pts: drawn, color: 0 }]
     : fl ? flat(path, radii, c, st.strokeColor, '#ffffff') : cable(drawn, c, w).pieces
-  const own = pieces.length > 1 || spec.ticks ? spec.own ?? groupId() : undefined
+  const own = pieces.length > 1 || spec.ticks || spec.text ? spec.own ?? groupId() : undefined
   const groupIds = [...(own ? [own] : []),
     ...(base?.groupIds ?? []).filter((g: string) => g !== spec.own && g !== spec.stack),
     ...(spec.stack ? [spec.stack] : [])]
@@ -95,8 +95,8 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   const [made] = convert([{ type: arrow ? 'arrow' : 'line', ...at, ...st,
     roundness: null, startArrowhead: arrow ? st.startArrowhead : null, endArrowhead: arrow ? st.endArrowhead ?? 'arrow' : null,
     ...(tint ? { backgroundColor: st.strokeColor + '33', fillStyle: 'solid' } : {}),
-    ...(fl ? { backgroundColor: pieces[0].color, fillStyle: 'solid', strokeWidth: pieces[0].width, strokeStyle: 'solid',
-      roughness: 0 } : {}),
+    ...(pieces[0].fill ? { backgroundColor: typeof pieces[0].color === 'string' ? pieces[0].color : st.strokeColor,
+      fillStyle: 'solid', strokeWidth: pieces[0].width, strokeStyle: 'solid', ...(fl ? { roughness: 0 } : {}) } : {}),
     groupIds, customData: { ligne: data } }])
   const main = base ? { ...made, id: base.id, version: base.version + 1 } : made
   const extra = (pts: XY[], skel: object, kind: string) => ({ type: 'line', ...placed(pts), roughness: st.roughness, ...skel,
@@ -119,13 +119,39 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
       extras.push(extra(v, { strokeColor: thick ? light : st.strokeColor,
         strokeWidth: thick ? Math.max(1, bw / 4) : 1.5, strokeStyle: 'solid' }, 'tick'))
   }
-  return [main, ...convert(extras)]
+  const bw = c ? cableWidth(c, w) : w
+  return [main, ...convert(extras), ...(spec.text ? lineText(convert, path, radii, bw, spec.text, st.strokeColor,
+    main.id, groupIds) : [])]
+}
+
+/** A line's text, repeated along its straight stretches, read upright: inside a body wide enough
+ *  for it (in the paper colour), else knocked out of the line in its colour. */
+function lineText(convert: Convert, path: XY[], radii: number[], bw: number, t: NonNullable<LineData['text']>,
+  color: string, of: string, groupIds: string[]): any[] {
+  const [m] = make(convert, [{ type: 'text', x: 0, y: 0, text: t.text, fontFamily: t.font, fontSize: t.size }])
+  const inside = bw >= m.height * 0.9, every = Math.max(m.width * 4, 200), out: any[] = []
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1], L = dist(a, b), u = unit([b[0] - a[0], b[1] - a[1]])
+    const r0 = i > 0 ? radii[i] : 0, r1 = i + 1 < path.length - 1 ? radii[i + 1] : 0, free = L - r0 - r1 - 8
+    if (free < m.width + 8) continue
+    const k = Math.max(1, Math.floor(free / every)), ang = upright(u)
+    for (let j = 0; j < k; j++) {
+      const s = r0 + 4 + free * (j + 0.5) / k, c: XY = [a[0] + u[0] * s, a[1] + u[1] * s]
+      const sk: any[] = inside ? [] : [{ type: 'rectangle', x: c[0] - m.width / 2 - m.height * 0.3, y: c[1] - bw / 2 - 1,
+        width: m.width + m.height * 0.6, height: bw + 2, strokeColor: 'transparent', backgroundColor: t.paper,
+        fillStyle: 'solid', strokeWidth: 1, roughness: 0, roundness: null }]
+      sk.push({ type: 'text', x: c[0] - m.width / 2, y: c[1] - m.height / 2, text: t.text, fontFamily: t.font,
+        fontSize: t.size, strokeColor: inside ? t.paper : color })
+      out.push(...turned(make(convert, sk.map(e => ({ ...e, groupIds, customData: { ligne: { kind: 'rep', of } } }))), c, ang))
+    }
+  }
+  return out
 }
 
 /** Whether e is an extra drawn with line `main`: in its own group (or, before that, by id). */
 function extraOf(e: any, main: any) {
   const k = e.customData?.ligne?.kind
-  if (e.isDeleted || (k !== 'strand' && k !== 'tick')) return false
+  if (e.isDeleted || (k !== 'strand' && k !== 'tick' && k !== 'rep')) return false
   const own = dataOf(main)?.own && main.groupIds?.[0]
   return own ? e.groupIds?.[0] === own : e.customData.ligne.of === main.id
 }
@@ -135,6 +161,19 @@ export function replace(scene: readonly any[], els: any[]): any[] {
   const [main, ...extras] = els, old = scene.find(e => e.id === main.id)
   return scene.flatMap(e => e.id === main.id ? [main, ...extras]
     : old && extraOf(e, old) ? [bump(e, { isDeleted: true })] : [e])
+}
+
+/** Moves the waypoints of spec s that sit on lanes onto them (after their offsets changed). */
+export function onLanes(scene: readonly any[], s: Spec) {
+  const links = s.links ?? []
+  links.forEach((l, j) => {
+    const base = l && findLine(scene, l.of)
+    if (!l || !base) return
+    const bp = pathOf(base), to = offsetAt(bp, l.i, l.t, l.d), by: XY = [to[0] - s.path[j][0], to[1] - s.path[j][1]]
+    s.path = carry(s.path, j, by, i => !!links[i])
+    s.path[j] = to
+    if (l.t === 0 && l.i > 0 && l.i < bp.length - 1) s.radii[j] = concentric(bp, radiiOf(base), l.d)[l.i]
+  })
 }
 
 /** Rebuilds the lines following lanes of line `id` (and theirs), after it changed in `scene`. A

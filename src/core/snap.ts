@@ -23,8 +23,8 @@ function norm(path: XY[], i: number, t: number): [number, number] {
  *  drawn beside a line falls into its lane rather than just off it). While following `track`, it
  *  holds on to that lane up to `leave` away, searched only around the leg last seen, so the pointer
  *  never jumps to another part of the line or to another line's lane. A lane already taken by a
- *  line is not offered. */
-export function laneAt(lines: Body[], p: XY, me: { width: number, cable: boolean }, o: {
+ *  line is not offered. `me.extra`: a wider gap, to set a line a little apart. */
+export function laneAt(lines: Body[], p: XY, me: { width: number, cable: boolean, extra?: number }, o: {
   tol: number, wide?: number, dir?: XY, leave?: number, track?: Track }): LaneHit | undefined {
   const tr = o.track, held = tr && lines.find(l => l.id === tr.of)
   if (tr && held) {
@@ -35,7 +35,7 @@ export function laneAt(lines: Body[], p: XY, me: { width: number, cable: boolean
   }
   let best: LaneHit | undefined, bd = Infinity
   for (const l of lines) {
-    const r = beside(l.path, p), [i, t] = norm(l.path, r.i, r.t), d = (Math.sign(r.d) || 1) * gap(l, me)
+    const r = beside(l.path, p), [i, t] = norm(l.path, r.i, r.t), d = (Math.sign(r.d) || 1) * (gap(l, me) + (me.extra ?? 0))
     const q = offsetAt(l.path, i, t, d), e = dist(p, q)
     const leg = unit([l.path[r.i + 1]?.[0] - l.path[r.i][0], l.path[r.i + 1]?.[1] - l.path[r.i][1]])
     const along = o.dir && Math.abs(leg[0] * o.dir[1] - leg[1] * o.dir[0]) < 1e-3

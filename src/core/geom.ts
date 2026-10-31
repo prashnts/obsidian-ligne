@@ -9,39 +9,62 @@ const dot = (a: XY, b: XY) => a[0] * b[0] + a[1] * b[1]
 export const dist = (a: XY, b: XY) => len(sub(a, b))
 export const same = (a: XY, b: XY) => dist(a, b) < EPS
 
-/** Projects p onto the nearest of the 8 compass directions out of a. */
-export function snap8(a: XY, p: XY): XY {
-  const d = sub(p, a), k = Math.round(Math.atan2(d[1], d[0]) / (Math.PI / 4)) * Math.PI / 4
-  const u: XY = [Math.round(Math.cos(k) * 1e9) / 1e9, Math.round(Math.sin(k) * 1e9) / 1e9]
-  const t = d[0] * u[0] + d[1] * u[1]
-  return [a[0] + u[0] * t, a[1] + u[1] * t]
+/** The leg directions: octilinear (45° multiples) or isometric (30°, 90°, 150° and back). */
+export type Grid = 'octi' | 'iso'
+const ring = (n: number, from: number): XY[] => Array.from({ length: n }, (_, k) => {
+  const a = from + k * 2 * Math.PI / n
+  return [Math.round(Math.cos(a) * 1e12) / 1e12, Math.round(Math.sin(a) * 1e12) / 1e12]
+})
+const DIRS: Record<Grid, XY[]> = { octi: ring(8, 0), iso: ring(6, Math.PI / 6) }
+export const dirsOf = (g: Grid = 'octi') => DIRS[g]
+
+/** Projects p onto the nearest leg direction out of a. */
+export function snapDir(a: XY, p: XY, grid: Grid = 'octi'): XY {
+  const d = sub(p, a)
+  let u = DIRS[grid][0], best = -Infinity
+  for (const v of DIRS[grid]) if (dot(d, v) > best) { best = dot(d, v); u = v }
+  return [a[0] + u[0] * best, a[1] + u[1] * best]
+}
+export const snap8 = (a: XY, p: XY) => snapDir(a, p, 'octi')
+
+/** Whether direction v (snapped to the grid) is a "diagonal" leg: octilinear, off the axes;
+ *  isometric, off the vertical. */
+export function isDiag(v: XY, grid: Grid = 'octi'): boolean {
+  const u = sub(snapDir([0, 0], v, grid), [0, 0]), ax = Math.abs(u[0]) < EPS || Math.abs(u[1]) < EPS
+  return grid === 'octi' ? !ax : Math.abs(u[0]) > EPS
 }
 
-/** The two corners a → b can bend at: after the 45° leg, or after the straight one. */
-function corners(a: XY, b: XY): [XY, XY] {
-  const d = sub(b, a), m = Math.min(Math.abs(d[0]), Math.abs(d[1]))
-  const diag: XY = [Math.sign(d[0]) * m, Math.sign(d[1]) * m]
-  return [[a[0] + diag[0], a[1] + diag[1]], [b[0] - diag[0], b[1] - diag[1]]]
+/** The two corners a → b can bend at, over the two leg directions either side of b - a: after the
+ *  "diagonal" leg (see isDiag), or after the other one. */
+function corners(a: XY, b: XY, grid: Grid = 'octi'): [XY, XY] {
+  const d = sub(b, a), ds = DIRS[grid], n = ds.length
+  for (let k = 0; k < n; k++) {
+    const u = ds[k], v = ds[(k + 1) % n], den = u[0] * v[1] - u[1] * v[0]
+    const s = (d[0] * v[1] - d[1] * v[0]) / den, t = (u[0] * d[1] - u[1] * d[0]) / den
+    if (s < -EPS || t < -EPS) continue
+    const viaU: XY = [a[0] + u[0] * s, a[1] + u[1] * s], viaV: XY = [a[0] + v[0] * t, a[1] + v[1] * t]
+    // two sloped legs (isometric): the rising one counts as the diagonal
+    const uDiag = isDiag(u, grid) && !(isDiag(v, grid) && u[1] >= v[1])
+    return uDiag ? [viaU, viaV] : [viaV, viaU]
+  }
+  return [b, b]
 }
 
-/** Whether a → b should start with its 45° leg: the order turning least from the incoming
+/** Whether a → b should start with its diagonal leg: the order turning least from the incoming
  *  direction `inDir` (metro lines avoid sharp turns); straight first without one. */
-export function diagFirst(a: XY, b: XY, inDir?: XY): boolean {
+export function diagFirst(a: XY, b: XY, inDir?: XY, grid: Grid = 'octi'): boolean {
   if (!inDir) return false
   const turn = (p: XY) => same(p, a) ? 0 : -dot(unit(sub(p, a)), inDir)
-  const [viaDiag, viaStraight] = corners(a, b)
+  const [viaDiag, viaStraight] = corners(a, b, grid)
   return turn(viaDiag) < turn(viaStraight)
 }
 
-/** a → b as one straight and one 45° leg; `diag`: the 45° one first (default: see diagFirst). */
-export function octi(a: XY, b: XY, diag?: boolean, inDir?: XY): XY[] {
-  const [viaDiag, viaStraight] = corners(a, b)
-  const mid = diag ?? diagFirst(a, b, inDir) ? viaDiag : viaStraight
+/** a → b as two legs on the grid; `diag`: the diagonal one first (default: see diagFirst). */
+export function octi(a: XY, b: XY, diag?: boolean, inDir?: XY, grid: Grid = 'octi'): XY[] {
+  const [viaDiag, viaStraight] = corners(a, b, grid)
+  const mid = diag ?? diagFirst(a, b, inDir, grid) ? viaDiag : viaStraight
   return same(mid, a) || same(mid, b) ? [a, b] : [a, mid, b]
 }
-
-/** Whether v points nearest to one of the four diagonals. */
-export const isDiag = (v: XY) => Math.round(Math.atan2(v[1], v[0]) / (Math.PI / 4)) % 2 !== 0
 
 /** Angle of direction u turned to read left to right: in (-90°, 90°]. */
 export function upright(u: XY): number {
@@ -191,15 +214,13 @@ export function pointAt(pts: XY[], s: number): { p: XY, u: XY } {
   return { p: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], u: unit(sub(b, a)) }
 }
 
-/** The four line directions. */
-const DIRS: XY[] = [[1, 0], [0, 1], [Math.SQRT1_2, Math.SQRT1_2], [Math.SQRT1_2, -Math.SQRT1_2]]
-
 /** The point nearest p from which both prev and next are reached by one octilinear leg (a waypoint
  *  moved between two others keeps both its legs at 45° multiples). */
-export function octiPoint(p: XY, prev?: XY, next?: XY): XY {
-  if (!prev || !next) return prev ?? next ? snap8((prev ?? next)!, p) : p
-  let best: XY = snap8(prev, p), bd = Infinity
-  for (const u of DIRS) for (const v of DIRS) {
+export function octiPoint(p: XY, prev?: XY, next?: XY, grid: Grid = 'octi'): XY {
+  if (!prev || !next) return prev ?? next ? snapDir((prev ?? next)!, p, grid) : p
+  const ds = DIRS[grid].slice(0, DIRS[grid].length / 2)
+  let best: XY = snapDir(prev, p, grid), bd = Infinity
+  for (const u of ds) for (const v of ds) {
     const den = u[0] * v[1] - u[1] * v[0]
     if (Math.abs(den) < EPS) continue
     // prev + u a = next + v b
