@@ -17,7 +17,7 @@
 // ones (ribbon, FFC) true to size, folded over with B, split at an end, ending in connectors.
 // Stops line up with what is drawn (guides), with the grid (G: square, isometric) and with a
 // perfboard's holes. S stations, T labels (text, boxes, net labels), X perfboards and parts.
-import { STYLES, cableWidth, type Cable, type CableStyle } from './core/cable.ts'
+import { STYLES, cableWidth, fanLeg, type Cable, type CableStyle } from './core/cable.ts'
 import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, endOf, flatTips, isFlat, swatch, wire, wirePitch,
   type Conn } from './core/flat.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
@@ -63,7 +63,7 @@ const SHAPES: Record<string, Shape> = { '1': 'stop', '2': 'interchange', '3': 'c
 type Mode = 'line' | 'station' | 'label' | 'board' | 'select'
 type GridMode = 'off' | 'square' | 'iso'
 const GRIDS: GridMode[] = ['off', 'square', 'iso']
-const PREFIX: Record<PartKind, string> = { board: '', R: 'R', C: 'C', D: 'D', LED: 'LED', J: 'J', DIP: 'U', TO92: 'Q',
+const PREFIX: Record<PartKind, string> = { board: '', R: 'R', C: 'C', D: 'D', LED: 'LED', J: 'J', F: 'J', DIP: 'U', TO92: 'Q',
   module: 'M' }
 /** Keys Excalidraw has with Ctrl / Cmd, forwarded to it when the focus is on ligne's own layer. */
 const FORWARD = 'zyxcvdag'
@@ -84,18 +84,21 @@ const HELP: [string, string][] = [
   ['double-click a line', 'select just it, even in a stack'],
   ['Shift / ⇧ button', 'free leg, along the grid\'s directions'],
   ['Backspace / Ctrl-Z · Esc', 'undo a stop · cancel'], ['Alt-click / I', "take a line's style"],
-  ['W · ⇧W', 'cable on/off · round, zigzag, checks (2nd colour: Excalidraw background), ribbon, FFC, chevron'],
+  ['W · ⇧W', 'body on/off · round, zigzag, checks (2nd colour: Excalidraw background), ribbon, FFC, jacket, chevron'],
+  ['twisted', 'popover: fan out at the start / end / both, spread and length (strands end side by side)'],
+  ['jacket', 'round sheathed cable true to size: wires inside, shield, ends stripped, in a housing or a plug'],
   ['ribbon / FFC', 'true size × scale · wire colours in the popover · E gauge / pitch'],
   ['B · ⇧B (flat)', 'fold at the next corner: turns over, the back shows · bend the other way'],
-  ['C', 'connector: none, Dupont, JST PH, SH, MX 1.25 (FFC: ZIF) · over a cable end: that end only'],
+  ['C', 'connector: Dupont F / M, JST PH, SH, MX, ZIF, USB-C / A / micro-B, barrel, 3.5 mm, RJ45 · over an end: it'],
+  ['popover', 'edits the selected lines if any ("For"), else sets up the next line'],
   ['flat cable end', 'click a wire: a bundle of it goes on (click another: up to it; all: the cable) · ⇧-click: the cable'],
   ['', 'drag a wire: fan it out · click a fanned wire: a plain line goes on from it'],
-  ['⇧T', 'text along the line, repeated (the line being drawn, else the selected ones)'],
+  ['⇧T', 'the label tool, "along": click a line, its text repeats along it'],
   ['A / D', 'arrowheads · direction chevrons (the way it was drawn)'],
   ['style', "Excalidraw's panel: colour, width, dash, arrowheads"],
   ['S · 1–4 · B', 'stations: stop, interchange, commit, net flag · labels in a box'],
-  ['T · 1–5 · B · F', 'labels: text, box, rounded, net label, flag · on a line / beside it · solid'],
-  ['X · 1–9', 'perfboard (drag its size), resistor, cap, diode, LED, header, DIP, TO-92, module: click holes'],
+  ['T · 1–6 · B · F', 'labels: text, box, rounded, net label, flag, along the line · on a line / beside it · solid'],
+  ['X · 1–9, 0', 'perfboard (drag its size), R, C, diode, LED, pin header, socket, DIP, TO-92, module: click holes'],
   ['R / ⇧R', 'select mode: turn the selection 90° / 45° (parts about pin 1)'],
   ['K', 'legend (again: rebuild)'], ['P / ⇧P · O', 'A5 / A6 sheet · landscape'],
   ['⇧C', 'copy the selection (else all) as SVG'], ['M', 'ligne on / off'], ['?', 'this help'],
@@ -144,7 +147,6 @@ export class Ligne {
   bend = false                                     // B: the other leg first
   flip = false                                     // flat cables: fold at the next corner
   private mod = false
-  private sel: string[] = []                       // lines selected when ligne was turned on
   picking = false                                  // next click takes a line's style
   r = 24
   spread = 0                                       // lane gap beyond touching
@@ -155,7 +157,6 @@ export class Ligne {
   size = 16
   partKind: PartKind = 'board'
   scale = 2                                        // perfboard: true size ×
-  lineText = ''                                    // repeated along the lines drawn next
   private pin?: XY                                 // a part's first hole
   private guides: Guide[] = []                     // shown with the pointer
   private refCache?: { els: readonly any[], pts: XY[] }
@@ -234,9 +235,7 @@ export class Ligne {
       // Excalidraw's own smart guides for its shapes while ligne is on
       this.snapWas = !!s.objectsSnapModeEnabled
       this.api.updateScene({ appState: { objectsSnapModeEnabled: true } })
-      this.sel = Object.keys(s.selectedElementIds ?? {})
-        .filter(id => this.live().some(e => e.id === id && isLine(e, true)))
-      const first = this.live().find(e => e.id === this.sel[0])
+      const first = this.live().find(e => e.id === this.selLines()[0])
       if (first) this.r = dataOf(first)!.r
       const saved = JSON.parse(localStorage.getItem(SAVED) ?? 'null') ?? DEFAULT
       this.api.updateScene({ appState: toState(saved) })
@@ -273,6 +272,9 @@ export class Ligne {
     })
     const t = s.activeTool?.type
     if (this.active && this.tool === this.held() && t !== this.held()) this.setActive(false)
+    // the popover says what it edits: kept in step with the selection
+    const picked = Object.keys(s.selectedElementIds ?? {}).join()
+    if (this.active && picked !== this.picked) { this.picked = picked; if (this.menu) this.panelUI() }
     this.tool = t
     if (!this.press?.dragging) this.draw()
   }
@@ -539,7 +541,7 @@ export class Ligne {
       return (['start', 'end'] as const).flatMap(end => t[end].map((at, j) => ({ end, j, at })))
     }
     const tip = (end: 'start' | 'end', j: number): XY => {
-      const at = end === 'start' ? path[0] : path[path.length - 1], to = c.legs?.[end]?.[j]
+      const at = end === 'start' ? path[0] : path[path.length - 1], to = c.legs?.[end]?.[j] ?? fanLeg(c, drawn, end, j)
       if (to) return [at[0] + to[0], at[1] + to[1]]
       const { u } = pointAt(drawn, end === 'start' ? 0 : Infinity), o = (j - (c.n - 1) / 2) * w
       return [at[0] - u[1] * o, at[1] + u[0] * o]
@@ -606,7 +608,7 @@ export class Ligne {
     }
     // cable leg tips near the pointer: drag them into place
     if (c && !n && this.mode === 'line') for (const l of this.lines()) {
-      if (!cableOf(l.el) || cableOf(l.el)!.style === 'chevron' || nearest(l.drawn, c).d > 60 / z) continue
+      if (!cableOf(l.el) || ['chevron', 'jacket'].includes(cableOf(l.el)!.style) || nearest(l.drawn, c).d > 60 / z) continue
       for (const t of this.tips(l.el)) kids.push(dot(t.at, 4, 'ligne-snap tip' + (g?.kind === 'leg'
         && g.el === l.el && g.end === t.end && g.j === t.j ? ' end' : '')))
     }
@@ -655,11 +657,12 @@ export class Ligne {
       out.push(path(this.partKind === 'module' ? [pins[0], [pins[1][0], pins[0][1]], pins[1], [pins[0][0], pins[1][1]],
         pins[0]] : pins, 'ligne-board', 2, '#1971c2'))
       out.push(...pins.map(q => dot(q, 3.5, 'ligne-snap')))
-      if (this.partKind === 'J' || this.partKind === 'DIP') this.hintText = `${pins.length} pins`
+      if (['J', 'F', 'DIP'].includes(this.partKind)) this.hintText = `${pins.length} pins`
     } else if (hole) out.push(dot(hole, Math.max(3, P2 * z * 0.25), 'ligne-snap'))
     return out
   }
   private hintText?: string
+  private picked = ''                              // the selection last seen
   private base?: readonly any[]                    // the scene before uncommitted (EVENTUALLY) updates
   private snapWas = false
 
@@ -768,7 +771,6 @@ export class Ligne {
     const s = specOf(el)
     this.api.updateScene({ appState: { selectedElementIds: { [el.id]: true }, selectedGroupIds: {},
       editingGroupId: s.own ?? s.stack ?? null } })
-    this.sel = [el.id]
     this.r = s.r
     this.panelUI()
   }
@@ -807,7 +809,7 @@ export class Ligne {
     if (tag) return { kind: 'tag', group: groupOf(els, tag), line: findLine(els, tag.customData.ligne.line) }
     if (this.mode !== 'line') return
     // the nearest leg tip: a cable's tips sit a strand width apart
-    const tip = this.lines().filter(l => cableOf(l.el) && !['ffc', 'chevron'].includes(cableOf(l.el)!.style))
+    const tip = this.lines().filter(l => cableOf(l.el) && !['ffc', 'chevron', 'jacket'].includes(cableOf(l.el)!.style))
       .flatMap(l => this.tips(l.el).map(t => ({ ...t, el: l.el })))
       .map(t => ({ t, d: dist(p, t.at) })).sort((a, b) => a.d - b.d)[0]
     if (tip && tip.d < tol * 0.6) return { kind: 'leg', el: tip.t.el, end: tip.t.end, j: tip.t.j }
@@ -905,6 +907,9 @@ export class Ligne {
     else if (hit) ln = undefined
     this.bend = false
     this.lead = undefined
+    // drawing: settings go to this line now, not to lines selected before
+    if (Object.keys(this.api.getAppState().selectedElementIds ?? {}).length)
+      this.api.updateScene({ appState: { selectedElementIds: {}, selectedGroupIds: {}, editingGroupId: null } })
     if (hit?.end) this.extend(hit.el, hit.end)
     else if (ln) {
       this.pts = [ln.q]; this.meta = [this.onLane(ln)]
@@ -956,9 +961,16 @@ export class Ligne {
     this.draw()
   }
 
-  /** Changes the lines selected when ligne was turned on (lines on their lanes follow). */
+  /** ligne lines selected in Excalidraw now (never a selection remembered from before: settings
+   *  changed with none go to the next line only). */
+  private selLines() {
+    const ids = this.api.getAppState().selectedElementIds ?? {}
+    return this.live().filter(e => ids[e.id] && isLine(e, true) && !stale(e)).map(e => e.id)
+  }
+
+  /** Changes the selected lines (lines on their lanes follow); false when none. */
   private applySel(f: (s: Spec) => void, capture: string) {
-    const ids = this.mode === 'select' ? Object.keys(this.api.getAppState().selectedElementIds ?? {}) : this.sel
+    const ids = this.selLines()
     if (this.pts.length || !ids.length) return false
     let scene = this.api.getSceneElements().slice()
     for (const id of ids) {
@@ -991,7 +1003,9 @@ export class Ligne {
     if (patch) this.cable = { ...this.cable, ...patch }
     this.applySel(s => {
       if (s.kind !== 'line') return
-      const o = s.cable, other = patch?.n !== undefined && patch.n !== o?.n ? { pick: undefined, legs: undefined } : {}
+      // other wire counts drop the split's pick and the legs; a new fan, the hand-placed legs
+      const o = s.cable, other = patch?.n !== undefined && patch.n !== o?.n ? { pick: undefined, legs: undefined }
+        : patch?.fan ? { legs: undefined } : {}
       s.cable = !this.twist ? undefined : o && patch ? { ...o, ...patch, ...other }
         : { ...this.cable, legs: o?.legs, folds: o?.folds, conn: o?.conn ?? this.cable.conn }
     }, capture)
@@ -1005,19 +1019,23 @@ export class Ligne {
     const conn: Conn = 'none'
     this.twist = true
     if (style === 'chevron') return this.cabling({ style, n: 1, pitch: was.style === 'chevron' ? was.pitch : 24 })
-    this.cabling({ style, n: fits && was.style !== 'chevron' ? was.n : style === 'ffc' ? 20 : flat ? 6 : 2,
-      ...(was.style === 'chevron' ? { pitch: 16 } : {}),
+    // a jacket: USB-like, 4 mm across, 4 wires inside, at twice true size
+    if (style === 'jacket') return this.cabling({ style, n: was.style === 'jacket' ? was.n : 4, mm: 4,
+      set: 'usb', scale: was.scale ?? 2, conn: { start: conn, end: conn } })
+    const odd = was.style === 'chevron' || was.style === 'jacket'
+    this.cabling({ style, n: fits && !odd ? was.n : style === 'ffc' ? 20 : flat ? 6 : 2,
+      ...(odd ? { pitch: 16 } : {}),
       ...(flat ? { awg: was.awg ?? 28, mm: was.mm ?? .5, set: was.set ?? 'mono', scale: was.scale ?? 1 } : {}),
       ...(flat && was.style !== style ? { conn: { start: conn, end: conn } } : {}) })
   }
 
-  /** A flat cable's end near p: the line, which end. */
+  /** The end of a flat or jacketed cable near p: the line, which end. */
   private endAt(p: XY) {
     const tol = 2 * SNAP / this.zoom()
     let best: { el: any, end: 'start' | 'end' } | undefined, bd = Infinity
     for (const l of this.lines()) {
       const c = cableOf(l.el)
-      if (!isFlat(c)) continue
+      if (!isFlat(c) && c?.style !== 'jacket') continue
       for (const end of ['start', 'end'] as const) {
         const d = dist(p, endOf(l.path, c!, end).at) - cableWidth(c!, 0) / 2
         if (d < tol && d < bd) { best = { el: l.el, end }; bd = d }
@@ -1030,7 +1048,7 @@ export class Ligne {
    *  is drawn next and of the selected lines. */
   private connect(hover = true) {
     const at = hover && this.mode === 'line' && this.cursor && !this.pts.length ? this.endAt(this.cursor) : undefined
-    const c = at ? cableOf(at.el)! : this.cable, list = CONNS[c.style === 'ffc' ? 'ffc' : 'ribbon']
+    const c = at ? cableOf(at.el)! : this.cable, list = CONNS[c.style === 'ffc' ? 'ffc' : c.style === 'jacket' ? 'jacket' : 'ribbon']
     const next = (k?: Conn) => list[(list.indexOf(k ?? 'none') + 1) % list.length]
     if (!at) {
       const k = next(c.conn?.end)
@@ -1110,9 +1128,9 @@ export class Ligne {
   }
 
   private save() {
-    const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, lineText } = this
+    const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale } = this
     localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
-      scale, lineText }))
+      scale }))
   }
 
   private undoStop() {
@@ -1158,7 +1176,7 @@ export class Ligne {
     else if (k === 'm') this.setActive(false)
     else if (this.mode === 'select' && (k === 'Backspace' || k === 'Delete')) return
     else if ((k === 'Backspace' || k === 'Delete') && !this.pts.length) return  // Excalidraw deletes the selection
-    else if (/^[1-9]$/.test(k) && this.digit(+k)) this.panelUI()
+    else if (/^[0-9]$/.test(k) && this.digit(+k || 10)) this.panelUI()
     else if (act) act()
     else return
     stop()
@@ -1167,7 +1185,7 @@ export class Ligne {
     this.draw(e.shiftKey)
   }
 
-  /** 1–9: the station shape, label type or part of the mode; false where they mean nothing. */
+  /** 1–9, 0 (n = 10): the station shape, label type or part of the mode; false where they mean nothing. */
   private digit(n: number) {
     if (this.mode === 'station' && SHAPES[n]) this.shape = SHAPES[n]
     else if (this.mode === 'label' && LABELS[n - 1]) this.labelType = LABELS[n - 1]
@@ -1188,7 +1206,7 @@ export class Ligne {
     t: () => this.setMode(this.mode === 'label' ? 'line' : 'label'),
     x: () => this.setMode(this.mode === 'board' ? 'line' : 'board'),
     v: () => this.setMode('select'),
-    T: () => this.askText(),
+    T: () => { this.setMode('label'); this.labelType = 'along'; this.save(); this.panelUI() },
     o: () => this.toggle('landscape'), '?': () => this.toggle('help'),
     h: () => this.toggle('help'), i: () => this.toggle('picking'), d: () => this.toggle('ticks'),
     f: () => this.toggle('solid'),
@@ -1268,21 +1286,15 @@ export class Ligne {
     this.put(this.api.getSceneElements().map(e => moved.get(e.id) ?? e), 'IMMEDIATELY')
   }
 
-  /** ⇧T: text repeated along the line being drawn and the next ones, else along the selected lines;
-   *  empty: none. */
-  private askText() {
-    const s = this.api.getAppState(), z = s.zoom.value
-    const at: XY = this.cursor ?? [s.width / 2 / z - s.scrollX, s.height / 2 / z - s.scrollY]
-    this.ask(at, text => {
-      this.lineText = text
-      this.applySel(sp => { sp.text = text ? this.textSpec() : undefined }, 'IMMEDIATELY')
-      this.save()
-      this.panelUI()
-    }, this.lineText, true)
-  }
-  private textSpec() {
-    return { text: this.lineText, font: FONTS[this.font], size: Math.min(this.size, 14),
-      paper: this.api.getAppState().viewBackgroundColor ?? '#ffffff' }
+  /** The label tool's "along": text repeated along line `el` (empty: none), asked in place at p. */
+  private alongText(el: any, p: XY) {
+    this.ask(p, text => {
+      const sp = specOf(el)
+      sp.text = text ? { text, font: FONTS[this.font], size: Math.min(this.size, 14),
+        paper: this.api.getAppState().viewBackgroundColor ?? '#ffffff' } : undefined
+      this.put(restack(this.convert, replace(this.api.getSceneElements(), lineEls(this.convert, sp, styleOf(el), el)), el.id),
+        'IMMEDIATELY')
+    }, dataOf(el)?.text?.text ?? '', true)
   }
 
   /** ⇧C: the selection (else everything) as SVG on the clipboard, as Excalidraw exports it. */
@@ -1332,7 +1344,9 @@ export class Ligne {
   /** A label at p, of the type picked: on the line there (along it), else where clicked; a flag at a
    *  line's end points away from it. Asks for the text in place. */
   private label(p: XY) {
-    const s = this.api.getAppState(), l = this.lineAt(p), end = this.labelType === 'flag' ? this.snapLine(p) : undefined
+    const s = this.api.getAppState(), l = this.lineAt(p)
+    if (this.labelType === 'along') return l && this.alongText(l.el, p)
+    const end = this.labelType === 'flag' ? this.snapLine(p) : undefined
     let at = this.placed(p).q, angle = 0, dir: 1 | -1 = 1
     if (end?.end && end.el) {
       const [a, b] = end.end === 'end' ? end.path.slice(-2) : end.path.slice(0, 2).reverse(), v = unit([b[0] - a[0], b[1] - a[1]])
@@ -1359,7 +1373,9 @@ export class Ligne {
     if (!this.pin && clicks(kind) === 2) { this.pin = q; return }
     const pins = pinsOf(kind, this.pin ?? q, q, P)
     this.pin = undefined
-    const n = this.live().filter(e => e.customData?.ligne?.kind === 'part' && e.customData.ligne.part === kind).length
+    // refs count on per prefix (headers and sockets are both J)
+    const n = this.live().filter(e => e.customData?.ligne?.kind === 'part' && PREFIX[e.customData.ligne.part as PartKind]
+      === PREFIX[kind]).length
     this.ask(pins[0], text => {
       const [ref = '', ...value] = text.split(/\s+/)
       this.add(part(this.convert, kind, pins, P, ref, value.join(' '), this.labelFont()))
@@ -1425,7 +1441,7 @@ export class Ligne {
     const spec: Spec = { kind: closed ? 'zone' : 'line', lid: d?.lid, path: pts, radii: meta.map(m => m.r),
       links: meta.map(m => m.link), r: this.r, from: this.from, to: endHit ? lidOf(endHit.el) : d?.to, stack,
       cable: this.twist ? this.made(meta, d?.cable) : undefined, ticks: this.ticks, arrow: this.arrow, own: d?.own,
-      grid: this.gridDirs() === 'iso' ? 'iso' : undefined, text: this.lineText ? this.textSpec() : d?.text }
+      grid: this.gridDirs() === 'iso' ? 'iso' : undefined, text: d?.text }
     const els = lineEls(this.convert, spec, fromState(this.api.getAppState()), base)
     if (base) {
       const shift = ed.reversed ? pts.length - ed.n : 0
@@ -1526,15 +1542,41 @@ export class Ligne {
       on: v === now, click: () => set(v), ...more(v) }))
     const kind = this.twist ? c.style : 'plain'
     const types = ['plain', ...STYLES] as const
-    const rows: Menu['rows'] = [{ label: 'Body', items: types.map(k => ({ icon: k === 'plain' ? 'line' : k,
+    // what the popover edits: the selected lines, else the lines drawn next
+    const sel = this.selLines().length
+    const target = Object.assign(document.createElement('span'), { className: 'ligne-for',
+      textContent: sel ? `the ${sel} selected line${sel > 1 ? 's' : ''}` : 'the next line' })
+    const rows: Menu['rows'] = [{ label: 'For', items: [target] }, { label: 'Body', items: types.map(k => ({ icon: k === 'plain' ? 'line' : k,
       title: k === 'plain' ? 'A plain line [W]' : `${k} [⇧W]`, on: k === kind,
       click: () => k === 'plain' ? (this.twist = false, this.cabling()) : this.restyle(k) })) }]
     if (this.twist && c.style === 'chevron') rows.push({ label: 'Width', items: [this.range('Band width', 6, 80, c.pitch,
       (v, cap) => this.cabling({ pitch: v }, cap, false))] })
-    else if (this.twist && !isFlat(c)) rows.push(
-      { label: 'Strands', items: opt('Strands', [2, 3, 4], c.n, n => this.cabling({ n })) },
-      { label: 'Twist', items: [this.range('Twist / check length', 4, 80, c.pitch,
-        (v, cap) => this.cabling({ pitch: v }, cap, false))] })
+    else if (this.twist && c.style === 'jacket') rows.push(
+      { label: 'Wires', items: [this.range('Wires inside', 1, 12, c.n, (v, cap) => this.cabling({ n: v }, cap, false))] },
+      { label: 'Across', items: opt('Jacket across', [2.5, 3, 4, 5, 6, 8], c.mm ?? 4, mm => this.cabling({ mm }),
+        v => `${v} mm`) },
+      { label: 'Colours', items: opt('Wire colours', SETS, c.set ?? 'usb', set => this.cabling({ set }),
+        v => v, v => ({ swatch: swatch(v, this.api.getAppState().currentItemStrokeColor) })) },
+      { label: 'Size', items: [...opt('True size ×', [1, 2, 4], c.scale ?? 2, scale => this.cabling({ scale }), v => `×${v}`),
+        { icon: 'shield', text: 'shield', title: 'Shielded: braid under the jacket, shown where stripped', on: !!c.shield,
+          click: () => this.cabling({ shield: !c.shield }) }] },
+      ...([['Ends', CONNS.jacket.slice(0, 7)], ['Plugs', CONNS.jacket.slice(7)]] as const).map(([label, ks]) => ({ label,
+        items: opt('Both ends [C; over an end: that end]', [...ks], c.conn?.end ?? 'none',
+          k => this.cabling({ conn: { start: k, end: k } }), v => CONN_NAMES[v]) })))
+    else if (this.twist && !isFlat(c)) {
+      const f = c.fan ?? { gap: 12, len: 60 }, ends = f.start && f.end ? 'both' : f.start ? 'start' : f.end ? 'end' : 'off'
+      rows.push(
+        { label: 'Strands', items: opt('Strands', [2, 3, 4], c.n, n => this.cabling({ n })) },
+        { label: 'Twist', items: [this.range('Twist / check length', 4, 80, c.pitch,
+          (v, cap) => this.cabling({ pitch: v }, cap, false))] },
+        { label: 'Fan out', items: opt('Strands fan out at 45°, then run side by side', ['off', 'start', 'end', 'both'], ends,
+          v => this.cabling({ fan: { ...f, start: v === 'start' || v === 'both', end: v === 'end' || v === 'both' } })) },
+        ...(ends === 'off' ? [] : [
+          { label: 'Spread', items: [this.range('Fanned strands apart', 4, 60, f.gap,
+            (v, cap) => this.cabling({ fan: { ...f, gap: v } }, cap, false))] },
+          { label: 'Length', items: [this.range('Fanned length', 10, 240, f.len,
+            (v, cap) => this.cabling({ fan: { ...f, len: v } }, cap, false))] }]))
+    }
     if (this.flat()) rows.push(
       { label: 'Wires', items: [this.range('Wires', 1, 40, c.n, (v, cap) => this.cabling({ n: v }, cap, false))] },
       ffc ? { label: 'Pitch', items: opt('FFC pitch [E]', FFC_PITCH, c.mm ?? .5, mm => this.cabling({ mm }), v => `${v} mm`) }
@@ -1588,8 +1630,7 @@ export class Ligne {
         { icon: 'arrow', title: 'Arrowheads (Excalidraw\'s arrow style)', key: 'A', on: this.arrow, click: A.a },
         { icon: 'ticks', title: 'Direction chevrons, the way the line was drawn', key: 'D', on: this.ticks, click: A.d },
         cable,
-        { icon: 'linetext', title: `Text along the line, repeated${this.lineText ? `: ${this.lineText}` : ''}`, key: '⇧T',
-          on: !!this.lineText, click: A.T },
+        { icon: 'linetext', title: 'Text along a line, repeated: the label tool\'s "along"', key: '⇧T', click: A.T },
         'sep' as const,
         { icon: 'finish', title: 'End the line', key: '⏎', click: A.Enter },
         { icon: 'undo', title: 'Undo a stop', key: '⌫', click: A.Backspace },
@@ -1599,9 +1640,11 @@ export class Ligne {
           on: this.shape === v, click: () => { this.shape = v; this.panelUI() } })),
         { icon: 'boxed', title: 'Labels in a box', key: 'B', on: this.boxed, click: A.b },
       ] : mode === 'label' ? [
-        ...LABELS.map((t, i) => ({ icon: { text: 'text', box: 'box', round: 'rounded', net: 'netlabel', flag: 'flag' }[t],
+        ...LABELS.map((t, i) => ({ icon: { text: 'text', box: 'box', round: 'rounded', net: 'netlabel', flag: 'flag',
+          along: 'linetext' }[t],
           title: { text: 'Text', box: 'Box', round: 'Rounded box', net: 'Net label (KiCad local): on the wire',
-            flag: 'Flag (KiCad global label): at a line end, pointing away' }[t], key: String(i + 1),
+            flag: 'Flag (KiCad global label): at a line end, pointing away',
+            along: 'Along the line: click a line, its text repeats along it (empty: none)' }[t], key: String(i + 1),
           on: this.labelType === t, click: () => { this.digit(i + 1); this.panelUI() } })),
         'sep' as const,
         { icon: 'boxed', title: this.onLine ? 'On the line (click: beside it)' : 'Beside the line (click: on it)',
@@ -1609,7 +1652,8 @@ export class Ligne {
         { icon: 'solid', title: 'Solid: filled with the line colour', key: 'F', on: this.solid, click: A.f },
         font, grid,
       ] : mode === 'board' ? [
-        ...PARTS.map((k, i) => ({ icon: k, title: PART_NAMES[k][0].toUpperCase() + PART_NAMES[k].slice(1), key: String(i + 1),
+        ...PARTS.map((k, i) => ({ icon: k, title: PART_NAMES[k][0].toUpperCase() + PART_NAMES[k].slice(1),
+          key: String((i + 1) % 10),
           on: this.partKind === k, click: () => { this.digit(i + 1); this.panelUI() } })),
         'sep' as const,
         ...opt('Perfboard: 2.54 mm true size ×', [1, 2, 4], this.scale, v => { this.scale = v; this.save(); this.panelUI() },

@@ -1,15 +1,17 @@
 // Perfboards and parts on them, in the style of limn's perfboard plans: a 2.54 mm hole grid true to
-// size × scale, parts lying over the holes (resistors, caps, diodes, LEDs, headers, DIPs, TO-92) and
+// size × scale, parts lying over the holes (resistors, caps, diodes, LEDs, pin headers and sockets,
+// DIPs, TO-92) and
 // module zones. Lines drawn over a board snap to its holes: wires. Parts are Excalidraw groups, so
 // Excalidraw moves and turns them; ligne puts pin 1 back on a hole after a move.
 import { MM } from './core/flat.ts'
 import { dist, unit, type XY } from './core/geom.ts'
 import { groupId, make, turned, type Convert, type Font } from './make.ts'
 
-export type PartKind = 'board' | 'R' | 'C' | 'D' | 'LED' | 'J' | 'DIP' | 'TO92' | 'module'
-export const PARTS: PartKind[] = ['board', 'R', 'C', 'D', 'LED', 'J', 'DIP', 'TO92', 'module']
+export type PartKind = 'board' | 'R' | 'C' | 'D' | 'LED' | 'J' | 'F' | 'DIP' | 'TO92' | 'module'
+/** In key order: 1–9, then 0. */
+export const PARTS: PartKind[] = ['board', 'R', 'C', 'D', 'LED', 'J', 'F', 'DIP', 'TO92', 'module']
 export const PART_NAMES: Record<PartKind, string> = { board: 'perfboard', R: 'resistor', C: 'capacitor',
-  D: 'diode', LED: 'LED', J: 'header', DIP: 'DIP', TO92: 'TO-92', module: 'module' }
+  D: 'diode', LED: 'LED', J: 'pin header (male)', F: 'socket (female)', DIP: 'DIP', TO92: 'TO-92', module: 'module' }
 /** Clicks a part takes: one (TO-92), else two (the ends; a DIP: pin 1 and the last of its row). */
 export const clicks = (k: PartKind) => k === 'TO92' ? 1 : 2
 
@@ -70,19 +72,22 @@ export function span(a: XY, b: XY, pitch: number) {
   return { at, cols, rows }
 }
 
+/** Parts in a single row of pins: headers and sockets. */
+const row = (k: PartKind) => k === 'J' || k === 'F'
+
 /** The pins of a part placed from hole a to hole b: two leads; a header's pins along the row or
  *  column; a DIP's two rows 0.3" apart (the second to the right of travel); TO-92 three in a row. */
 export function pinsOf(kind: PartKind, a: XY, b: XY, P: number): XY[] {
   if (kind === 'TO92') return [[a[0] - P, a[1]], a, [a[0] + P, a[1]]]
-  if (kind !== 'J' && kind !== 'DIP') return [a, b]
+  if (!row(kind) && kind !== 'DIP') return [a, b]
   // along the dominant axis, whole holes
   const dx = b[0] - a[0], dy = b[1] - a[1], horiz = Math.abs(dx) >= Math.abs(dy)
   const n = Math.max(kind === 'DIP' ? 2 : 1, Math.round(Math.abs(horiz ? dx : dy) / P) + 1)
   const u: XY = horiz ? [Math.sign(dx) || 1, 0] : [0, Math.sign(dy) || 1]
-  const row = Array.from({ length: n }, (_, k) => [a[0] + u[0] * k * P, a[1] + u[1] * k * P] as XY)
-  if (kind === 'J') return row
+  const line = Array.from({ length: n }, (_, k) => [a[0] + u[0] * k * P, a[1] + u[1] * k * P] as XY)
+  if (row(kind)) return line
   const side: XY = [u[1] * 3 * P, -u[0] * 3 * P]
-  return [...row, ...row.slice().reverse().map(p => [p[0] + side[0], p[1] + side[1]] as XY)]
+  return [...line, ...line.slice().reverse().map(p => [p[0] + side[0], p[1] + side[1]] as XY)]
 }
 
 /** A part's elements over its pins (scene points), body first; ref and value as small text. */
@@ -91,9 +96,9 @@ export function part(convert: Convert, kind: Exclude<PartKind, 'board'>, pins: X
   const g = groupId(), a = pins[0], b = pins[1] ?? a, n = pins.length
   const mid: XY = kind === 'DIP' ? [(pins[0][0] + pins[n - 1][0] + pins[n / 2 - 1][0] + pins[n / 2][0]) / 4,
     (pins[0][1] + pins[n - 1][1] + pins[n / 2 - 1][1] + pins[n / 2][1]) / 4]
-    : kind === 'J' ? [(a[0] + pins[n - 1][0]) / 2, (a[1] + pins[n - 1][1]) / 2] : kind === 'TO92' ? a
+    : row(kind) ? [(a[0] + pins[n - 1][0]) / 2, (a[1] + pins[n - 1][1]) / 2] : kind === 'TO92' ? a
     : [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
-  const far = kind === 'J' || kind === 'DIP' ? pins[kind === 'J' ? n - 1 : n / 2 - 1] : b
+  const far = row(kind) || kind === 'DIP' ? pins[row(kind) ? n - 1 : n / 2 - 1] : b
   const u = dist(a, far) > 1e-6 ? unit([far[0] - a[0], far[1] - a[1]]) : [1, 0] as XY
   const ang = Math.atan2(u[1], u[0]), L = dist(a, far)
   const fs = Math.max(6, P * 0.5), base = { roughness: 0, strokeWidth: 1, fillStyle: 'solid', groupIds: [g] }
@@ -103,7 +108,7 @@ export function part(convert: Convert, kind: Exclude<PartKind, 'board'>, pins: X
   const oval = (w: number, h: number, fill: string, stroke: string, at = mid) => ({ type: 'ellipse', x: at[0] - w / 2,
     y: at[1] - h / 2, width: w, height: h, backgroundColor: fill, strokeColor: stroke, ...base })
   let body: any, more: any[] = []
-  const lead = kind === 'J' || kind === 'DIP' || kind === 'module' ? [] : [{ type: 'line', x: a[0], y: a[1],
+  const lead = row(kind) || kind === 'DIP' || kind === 'module' ? [] : [{ type: 'line', x: a[0], y: a[1],
     points: [[0, 0], [b[0] - a[0], b[1] - a[1]]], strokeColor: LEAD, strokeWidth: Math.max(1, P * 0.12), roughness: 0,
     roundness: null, groupIds: [g] }]
   switch (kind) {
@@ -118,7 +123,8 @@ export function part(convert: Convert, kind: Exclude<PartKind, 'board'>, pins: X
       more = [rect(P * 0.18, P * 0.45, '#ced4da', '#ced4da', { x: mid[0] + w / 2 - P * 0.35, y: mid[1] - P * 0.225 })]
       break
     }
-    case 'J': body = rect(L + P * 0.9, P * 0.9, '#2d6a4f', '#1b4332', { opacity: 85 }); break
+    // black plastic: a male header's square gold pins, a socket's openings
+    case 'J': case 'F': body = rect(L + P, P, '#212529', '#000000'); break
     case 'DIP': {
       body = rect(L + P * 0.8, P * 2.1, '#2b2b2b', '#000000')
       more = [oval(P * 0.5, P * 0.5, '#495057', '#495057', [mid[0] - (L + P * 0.8) / 2 + P * 0.1, mid[1]])]
@@ -145,9 +151,10 @@ export function part(convert: Convert, kind: Exclude<PartKind, 'board'>, pins: X
       break
     }
   }
-  const dots = kind === 'module' ? [] : pins.map((p, i) => ({ type: i === 0 && (kind === 'J' || kind === 'DIP')
-    ? 'rectangle' : 'ellipse', x: p[0] - P * 0.18, y: p[1] - P * 0.18, width: P * 0.36, height: P * 0.36,
-    backgroundColor: kind === 'J' || kind === 'DIP' ? '#d9d9d9' : LEAD, strokeColor: 'transparent', ...base }))
+  const sq = kind === 'J' || kind === 'F', d = kind === 'J' ? P * 0.26 : kind === 'F' ? P * 0.4 : P * 0.36
+  const dots = kind === 'module' ? [] : pins.map((p, i) => ({ type: sq || i === 0 && kind === 'DIP' ? 'rectangle' : 'ellipse',
+    x: p[0] - d / 2, y: p[1] - d / 2, width: d, height: d, strokeColor: kind === 'F' ? '#495057' : 'transparent',
+    backgroundColor: kind === 'J' ? '#e0b44a' : kind === 'F' ? '#0b0b0c' : kind === 'DIP' ? '#d9d9d9' : LEAD, ...base }))
   // the body and its marks turn with the part; leads and pin dots are placed where they are
   const turn = (els: any[]) => kind === 'module' || kind === 'TO92' ? els : turned(els, mid, ang)
   const [b0, ...bs] = make(convert, [body, ...more])

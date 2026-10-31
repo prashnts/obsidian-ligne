@@ -49,6 +49,10 @@ const ICONS: Record<string, string> = {
   D: '<path d="M2 10h4M14 10h4"/><rect x="6" y="7.5" width="8" height="5"/><path d="M12 7.5v5"/>',
   LED: '<circle cx="10" cy="10" r="5"/><path d="M14 4l2-2M16 6l2-2"/>',
   J: '<rect x="2" y="7" width="16" height="6" rx="1"/><path d="M5 10h.1M10 10h.1M15 10h.1" stroke-width="2.5"/>',
+  F: '<rect x="2" y="7" width="16" height="6" rx="1"/><rect x="4" y="9" width="2" height="2"/><rect x="9" y="9" width="2" height="2"/><rect x="14" y="9" width="2" height="2"/>',
+  jacket: '<path d="M2 8h16M2 12h16" stroke-width="1.5"/><path d="M2 10h16" stroke-width="4" opacity=".35"/>',
+  fan: '<path d="M2 10h6M8 10l4-5h6M8 10h10M8 10l4 5h6"/>',
+  shield: '<path d="M3 7l3 6M7 7l3 6M11 7l3 6M15 7l2 4"/><path d="M2 7h16M2 13h16"/>',
   DIP: '<rect x="5" y="3" width="10" height="14" rx="1"/><path d="M2 6h3M2 10h3M2 14h3M15 6h3M15 10h3M15 14h3"/>',
   TO92: '<path d="M4 13a6 6 0 0 1 12 0z"/><path d="M7 13v4M10 13v4M13 13v4"/>',
   module: '<rect x="3" y="4" width="14" height="12" rx="2" stroke-dasharray="2 2"/>',
@@ -156,6 +160,10 @@ function menu(m: Menu) {
     pop.append(row)
   }
   at.append(pop)
+  // kept inside the window: opens leftwards when it would run off the right
+  requestAnimationFrame(() => {
+    if (pop.getBoundingClientRect().right > window.innerWidth - 8) Object.assign(pop.style, { left: 'auto', right: '0' })
+  })
   return at
 }
 const sep = () => Object.assign(document.createElement('span'), { className: 'sep' })

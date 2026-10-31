@@ -58,3 +58,4 @@
 .ligne-toast { position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 6; padding: 6px 12px;
   border-radius: 8px; background: #1e1e1e; color: #fff; font: 12px var(--ui-font, system-ui); pointer-events: none; }
 .ligne-input { font-family: 'Cascadia', ui-monospace, monospace; }
+.ligne-for { font: 11px var(--ui-font, system-ui); opacity: .8; padding: 0 4px; }

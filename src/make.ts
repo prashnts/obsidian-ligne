@@ -71,9 +71,10 @@ export function station(convert: Convert, o: { at: XY, shape: Shape, color: stri
 }
 
 /** Label types: plain text (on a line: knocked out), a box, a rounded box, KiCad's net label
- *  (text on the wire) and global label (a flag pointing away). */
-export type LabelType = 'text' | 'box' | 'round' | 'net' | 'flag'
-export const LABELS: LabelType[] = ['text', 'box', 'round', 'net', 'flag']
+ *  (text on the wire) and global label (a flag pointing away); `along`: text repeated along a line,
+ *  part of the line (lines.ts). */
+export type LabelType = 'text' | 'box' | 'round' | 'net' | 'flag' | 'along'
+export const LABELS: LabelType[] = ['text', 'box', 'round', 'net', 'flag', 'along']
 /** Excalidraw font families ligne offers: Cascadia (mono), Liberation Sans, Excalifont (hand). */
 export const FONTS = { mono: 3, sans: 9, hand: 5 } as const
 export const SIZES = [12, 16, 20, 28]

@@ -2,8 +2,9 @@
 // extras drawn with it in its own group (cable strands and checks, direction chevrons). Lines that
 // follow a lane of another line are rebuilt when that line changes (restack). Lines are found by
 // lid and groups, never by element id alone: Excalidraw re-ids elements on paste and duplicate.
-import { cable, cableWidth, chevrons, type Cable, type Piece } from './core/cable.ts'
+import { bandLine, cable, cableWidth, chevronBand, chevrons, type Cable, type Piece } from './core/cable.ts'
 import { flat, isFlat } from './core/flat.ts'
+import { jacket } from './core/jacket.ts'
 import { carry, concentric, dist, offsetAt, round, unit, upright, type XY } from './core/geom.ts'
 import type { LineData } from './core/graph.ts'
 import type { Body } from './core/snap.ts'
@@ -79,8 +80,11 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   const mid: XY = [(path[0][0] + path[1][0]) / 2, (path[0][1] + path[1][1]) / 2]
   const drawn = kind === 'zone' ? round([mid, ...path.slice(1), mid], [0, ...radii.slice(1), 0]) : round(path, radii)
   // a flat cable's colours are its own: the main element is its first band, outlined in the line colour
-  const fl = isFlat(c), pieces: Piece[] = !c ? [{ pts: drawn, color: 0 }]
-    : fl ? flat(path, radii, c, st.strokeColor, '#ffffff') : cable(drawn, c, w).pieces
+  const fl = isFlat(c) || c?.style === 'jacket', pieces: Piece[] = !c ? [{ pts: drawn, color: 0 }]
+    : isFlat(c) ? flat(path, radii, c, st.strokeColor, '#ffffff')
+    : c.style === 'jacket' ? jacket(path, radii, c, st.strokeColor)
+    : c.style === 'chevron' ? [{ pts: chevronBand(bandLine(path, radii, c.pitch), c.pitch), color: 0, fill: true, width: 1 }]
+    : cable(drawn, c, w).pieces
   const own = pieces.length > 1 || spec.ticks || spec.text ? spec.own ?? groupId() : undefined
   const groupIds = [...(own ? [own] : []),
     ...(base?.groupIds ?? []).filter((g: string) => g !== spec.own && g !== spec.stack),
@@ -96,7 +100,8 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
     roundness: null, startArrowhead: arrow ? st.startArrowhead : null, endArrowhead: arrow ? st.endArrowhead ?? 'arrow' : null,
     ...(tint ? { backgroundColor: st.strokeColor + '33', fillStyle: 'solid' } : {}),
     ...(pieces[0].fill ? { backgroundColor: typeof pieces[0].color === 'string' ? pieces[0].color : st.strokeColor,
-      fillStyle: 'solid', strokeWidth: pieces[0].width, strokeStyle: 'solid', ...(fl ? { roughness: 0 } : {}) } : {}),
+      // the outline stays the line's colour: it is what restyles and rebuilds read back
+      fillStyle: 'solid', strokeWidth: pieces[0].width, strokeStyle: 'solid', roughness: 0 } : {}),
     groupIds, customData: { ligne: data } }])
   const main = base ? { ...made, id: base.id, version: base.version + 1 } : made
   const extra = (pts: XY[], skel: object, kind: string) => ({ type: 'line', ...placed(pts), roughness: st.roughness, ...skel,

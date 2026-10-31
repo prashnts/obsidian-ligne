@@ -12,11 +12,13 @@ export const AWG: Record<number, number> = { 32: 0.7, 30: 0.9, 28: 1.1, 26: 1.4 
 export const GAUGES = [32, 30, 28, 26]
 export const FFC_PITCH = [0.5, 1]
 
-export type WireSet = 'mono' | 'qwiic' | 'grove' | 'rainbow'
-export const SETS: WireSet[] = ['mono', 'qwiic', 'grove', 'rainbow']
-/** Pin 1 first: Qwiic GND 3V3 SDA SCL, Grove SCL SDA VCC GND, rainbow ribbon brown to black. */
+export type WireSet = 'mono' | 'qwiic' | 'grove' | 'rainbow' | 'usb'
+export const SETS: WireSet[] = ['mono', 'qwiic', 'grove', 'rainbow', 'usb']
+/** Pin 1 first: Qwiic GND 3V3 SDA SCL, Grove SCL SDA VCC GND, rainbow ribbon brown to black, USB VBUS
+ *  D- D+ GND. */
 const COLORS: Record<Exclude<WireSet, 'mono'>, string[]> = {
   qwiic: ['#1e1e1e', '#e03131', '#1c7ed6', '#fab005'],
+  usb: ['#e03131', '#f1f3f5', '#2f9e44', '#1e1e1e'],
   grove: ['#fab005', '#f1f3f5', '#e03131', '#1e1e1e'],
   rainbow: ['#8b4513', '#e03131', '#fd7e14', '#fab005', '#2f9e44', '#1c7ed6', '#7048e8', '#868e96', '#f1f3f5',
     '#1e1e1e'],
@@ -25,16 +27,26 @@ const COLORS: Record<Exclude<WireSet, 'mono'>, string[]> = {
 /** Wire colours of a set, for a sample (mono: the line colour, striped). */
 export const swatch = (set: WireSet, base: string) => set === 'mono' ? [base, '#ffffff', base, base] : COLORS[set]
 
-export type Conn = 'none' | 'dupont' | 'jst' | 'sh' | 'mx' | 'zif'
-export const CONNS: Record<'ribbon' | 'ffc', Conn[]> = {
-  ribbon: ['none', 'dupont', 'jst', 'sh', 'mx'], ffc: ['none', 'zif'] }
+/** Cable ends: wire housings (Dupont female / male, JST PH, SH, MX), an FFC's ZIF, a jacket's
+ *  stripped end or its plugs (jacket.ts). */
+export type Conn = 'none' | 'dupont' | 'dupontm' | 'jst' | 'sh' | 'mx' | 'zif' | Plug
+export type Plug = 'strip' | 'usbc' | 'usba' | 'microb' | 'barrel' | 'trs' | 'rj45'
+const WIRED: Conn[] = ['dupont', 'dupontm', 'jst', 'sh', 'mx']
+export const CONNS: Record<'ribbon' | 'ffc' | 'jacket', Conn[]> = {
+  ribbon: ['none', ...WIRED], ffc: ['none', 'zif'],
+  jacket: ['none', 'strip', ...WIRED, 'usbc', 'usba', 'microb', 'barrel', 'trs', 'rj45'] }
 export const CONN_NAMES: Record<Conn, string> = {
-  none: 'none', dupont: 'Dupont', jst: 'JST PH', sh: 'SH', mx: 'MX 1.25', zif: 'ZIF' }
+  none: 'none', dupont: 'Dupont F', dupontm: 'Dupont M', jst: 'JST PH', sh: 'SH', mx: 'MX 1.25', zif: 'ZIF',
+  strip: 'stripped', usbc: 'USB-C', usba: 'USB-A', microb: 'micro-B', barrel: 'barrel 5.5', trs: '3.5 mm',
+  rj45: 'RJ45' }
+/** Wire housings: the wires close up to their pitch and go into one. */
+export const isHousing = (k?: Conn) => !!k && WIRED.includes(k)
 /** Housings in mm: pin pitch, width beyond the outer pins' centres, depth along the wires (JST = PH,
  *  MX = Molex PicoBlade style 1.25, zif: the FFC's pitch). */
-const HOUSING: Record<Exclude<Conn, 'none'>, { pitch: number, edge: number, depth: number, body: string,
+export const HOUSING: Record<'dupont' | 'dupontm' | 'jst' | 'sh' | 'mx' | 'zif', { pitch: number, edge: number, depth: number, body: string,
   line: string, slot: string }> = {
   dupont: { pitch: 2.54, edge: 2.54, depth: 14, body: '#1e1e1e', line: '#000000', slot: '#868e96' },
+  dupontm: { pitch: 2.54, edge: 2.54, depth: 14, body: '#1e1e1e', line: '#000000', slot: '#868e96' },
   jst: { pitch: 2, edge: 3.9, depth: 6, body: '#f4f1e8', line: '#8a8371', slot: '#5c574a' },
   sh: { pitch: 1, edge: 3, depth: 4.25, body: '#f4f1e8', line: '#8a8371', slot: '#5c574a' },
   mx: { pitch: 1.25, edge: 3.2, depth: 5, body: '#f4f1e8', line: '#8a8371', slot: '#5c574a' },
@@ -127,7 +139,7 @@ export function flat(path: XY[], radii: readonly number[], c: Cable, base: strin
   const cuts = [0, ...path.map((_, i) => i).filter(i => i > 0 && i < last && c.folds?.[i]), last]
   const conns = { start: c.conn?.start ?? 'none', end: c.conn?.end ?? 'none' }
   const fanned = (end: End) => !ffc && !!c.legs?.[end]?.some(Boolean)
-  const housed = (end: End) => !ffc && conns[end] !== 'none' && !fanned(end)
+  const housed = (end: End) => !ffc && isHousing(conns[end]) && !fanned(end)
   const fan = (end: End) => {
     const h = HOUSING[conns[end] as 'dupont'], cp = h.pitch * k
     const d = Math.max(...os.map((o, j) => Math.abs(o - (j - (c.n - 1) / 2) * cp)))
@@ -200,8 +212,8 @@ export function flat(path: XY[], radii: readonly number[], c: Cable, base: strin
           out.push({ pts, color: lift(w.color, e.side, .2), width: ww })
           if (w.stripe) out.push({ pts, color: light, width: P * .28, dash: e.side < 0 })
         }
-        if (conn === 'none') continue
-        const u = pts.length > 1 ? legDir(pts[pts.length - 2], pts[pts.length - 1]) : e.u, h = HOUSING[conn]
+        if (!isHousing(conn)) continue
+        const u = pts.length > 1 ? legDir(pts[pts.length - 2], pts[pts.length - 1]) : e.u, h = HOUSING[conn as 'dupont']
         out.push(...housing(add(tips[j], u, -h.depth * k), u, left(u), 1, { ...c, n: 1, pick: [c.pick?.[j] ?? j] },
           conn, h.pitch * k, h.depth * k, h.edge * k))
       }
@@ -229,7 +241,7 @@ function rect(at: XY, u: XY, nl: XY, d: number, w: number, fill: string, stroke:
 
 /** A connector housing from `at` (its back, where the wires go in) D deep along u: body, pin slots
  *  near the mating face (a triangle at pin 1), dividers between Dupont pins, a ZIF's actuator. */
-function housing(at: XY, u: XY, nl: XY, side: number, c: Cable, conn: Conn, cp: number, D: number, w: number): Piece[] {
+export function housing(at: XY, u: XY, nl: XY, side: number, c: Cable, conn: Conn, cp: number, D: number, w: number): Piece[] {
   const h = HOUSING[conn as 'dupont'], line = Math.max(.5, .15 * px(c))
   const out = [rect(at, u, nl, D, w, h.body, h.line, line)]
   if (conn === 'zif') return [...out, rect(at, u, nl, D * .3, w, h.slot, h.line, line)]
@@ -239,7 +251,12 @@ function housing(at: XY, u: XY, nl: XY, side: number, c: Cable, conn: Conn, cp: 
     const tri = [add(m, nl, -r * 1.3), add(m, u, r * 1.6), add(m, nl, r * 1.3), add(m, nl, -r * 1.3)].map(p => add(p, u, -r * .3))
     out.push((c.pick?.[j] ?? j) === 0 ? { pts: tri, color: h.slot, fill: true, stroke: h.slot, width: line / 2 }
       : rect(add(m, u, -r), u, nl, 2 * r, 2 * r, h.slot, h.slot, line / 2))
-    if (conn === 'dupont' && j) {
+    // a male housing: square pins out of the mating face
+    if (conn === 'dupontm') {
+      const b = add(add(at, u, D), nl, o)
+      out.push({ pts: [b, add(b, u, 6 * px(c))], color: '#d4a72c', width: .64 * px(c) })
+    }
+    if ((conn === 'dupont' || conn === 'dupontm') && j) {
       const b = add(at, nl, o - side * cp / 2)
       out.push({ pts: [b, add(b, u, D)], color: '#495057', width: line })
     }

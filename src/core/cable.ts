@@ -1,21 +1,25 @@
 // Cables: n strands of width w along a line, twisted (round or zigzag) or side by side with colour
-// checks; ribbons and FFC (flat.ts). Each end may fan out into legs, one per strand, each to its
-// own point. Output is plain pieces (polylines and filled polygons), for any host to draw.
-import { flatWidth, isFlat, type Conn, type WireSet } from './flat.ts'
-import { dist, lengths, normals, octi, pointAt, resample, round, type XY } from './geom.ts'
+// checks; ribbons and FFC (flat.ts), jacketed round cables (jacket.ts), chevron bands. Each end may
+// fan out into legs, one per strand, each to its own point, or all fanned out evenly. Output is plain pieces (polylines and filled polygons), for any host to draw.
+import { MM, flatWidth, isFlat, type Conn, type WireSet } from './flat.ts'
+import { dist, lengths, normals, octi, pointAt, resample, round, unit, type XY } from './geom.ts'
 
-export type CableStyle = 'round' | 'zigzag' | 'checks' | 'ribbon' | 'ffc' | 'chevron'
-export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc', 'chevron']
+const sub = (a: XY, b: XY): XY => [a[0] - b[0], a[1] - b[1]]
+
+export type CableStyle = 'round' | 'zigzag' | 'checks' | 'ribbon' | 'ffc' | 'jacket' | 'chevron'
+export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc', 'jacket', 'chevron']
 
 /** Per end, per strand: where its leg goes, relative to that end of the line (null: straight on). */
 export interface Legs { start?: (XY | null)[], end?: (XY | null)[] }
 /** `pitch`: length of one full twist, or of two checks. Flat cables (ribbon, ffc): `awg` (ribbon)
  *  or `mm` (FFC pitch), true size × `scale`; ribbon colours `set`, of which a split takes the wires
- *  `pick`; `folds` per waypoint (the first: starts back up); a connector at each end. */
+ *  `pick`; `folds` per waypoint (the first: starts back up); a connector at each end. A jacket: `mm`
+ *  across, n wires inside, `shield` braid. Twisted ends `fan` out evenly: `gap` apart, `len` long. */
 export interface Cable {
   style: CableStyle, n: number, pitch: number, legs?: Legs,
   awg?: number, mm?: number, scale?: number, set?: WireSet, pick?: number[], folds?: boolean[],
-  conn?: { start?: Conn, end?: Conn },
+  conn?: { start?: Conn, end?: Conn }, shield?: boolean,
+  fan?: { start?: boolean, end?: boolean, gap: number, len: number },
 }
 
 /** A polyline stroked w wide (or `width`), or with `fill` a polygon outlined in `stroke`; colour 0
@@ -28,17 +32,38 @@ const amp = (n: number, w: number) => (n - 1) * w / 2 + w / 4
 
 /** Overall width of the cable body. */
 export const cableWidth = (c: Cable, w: number) => isFlat(c) ? flatWidth(c) : c.style === 'chevron' ? c.pitch
+  : c.style === 'jacket' ? (c.mm ?? 4) * MM * (c.scale ?? 1)
   : c.style === 'checks' ? c.n * w : 2 * amp(c.n, w) + w
 
-/** A chevron band (git-flow style): `width` wide along the line, a notched tail and a pointed head
- *  ending at the line's end. One polygon. */
+/** The centre line of a band `width` wide: bends no tighter than its width allows (the inner edge
+ *  would fold over), arcs sampled finely enough for a wide outline. */
+export const bandLine = (path: XY[], radii: readonly number[], width: number) =>
+  round(path, radii.map(r => r > 0 ? Math.max(r, width * 0.75) : 0), Math.PI / 64)
+
+/** Both edges of a band `width` wide along `drawn`, mitred on bends. */
+export function edges(drawn: XY[], width: number): [XY[], XY[]] {
+  const ns = normals(drawn), at = (k: number) => drawn.map((p, i) => [p[0] + ns[i][0] * k, p[1] + ns[i][1] * k] as XY)
+  return [at(width / 2), at(-width / 2)]
+}
+
+/** A chevron band (git-flow style): `width` wide along the line (see bandLine), a notched tail and a
+ *  pointed head ending at the line's end. One polygon. */
 export function chevronBand(drawn: XY[], width: number): XY[] {
-  const L = lengths(drawn).at(-1) ?? 0, h = Math.min(width / 2, L / 3), body = resample(drawn, 4)
-  const pts = body.pts.filter((_, i) => body.s[i] < L - h)
-  pts.push(pointAt(drawn, L - h).p)
-  const ns = normals(pts), side = (k: number) => pts.map((p, i) => [p[0] + ns[i][0] * k, p[1] + ns[i][1] * k] as XY)
+  const s = lengths(drawn), L = s.at(-1) ?? 0, h = Math.min(width / 2, L / 3)
+  const pts = [...drawn.filter((_, i) => s[i] < L - h), pointAt(drawn, L - h).p]
+  const [l, r] = edges(pts, width)
   const u = pointAt(drawn, 0).u, notch: XY = [drawn[0][0] + u[0] * h, drawn[0][1] + u[1] * h]
-  return [notch, ...side(width / 2), drawn[drawn.length - 1], ...side(-width / 2).reverse(), notch]
+  return [notch, ...l, drawn[drawn.length - 1], ...r.reverse(), notch]
+}
+
+/** Where strand j of n leaves to at an end when the end fans out: `len` on, set `gap` apart across,
+ *  relative to that end of `drawn`. */
+export function fanLeg(c: Cable, drawn: XY[], end: 'start' | 'end', j: number): XY | null {
+  const f = c.fan
+  if (!f?.[end]) return null
+  const L = lengths(drawn).at(-1) ?? 0, { u } = pointAt(drawn, end === 'start' ? 0 : L)
+  const out: XY = end === 'start' ? [-u[0], -u[1]] : u, nl: XY = [-u[1], u[0]], o = (j - (c.n - 1) / 2) * f.gap
+  return [out[0] * f.len + nl[0] * o, out[1] * f.len + nl[1] * o]
 }
 
 const wave = (x: number, zig: boolean) => zig ? 2 / Math.PI * Math.asin(Math.sin(x)) : Math.sin(x)
@@ -50,8 +75,6 @@ interface Strand { pts: XY[], s: number[] }
 /** The cable over the (rounded) line `drawn`. Twists straighten out over half a pitch at both
  *  ends, so legs leave side by side. */
 export function cable(drawn: XY[], c: Cable, w: number): { pieces: Piece[], tips: { start: XY[], end: XY[] } } {
-  if (c.style === 'chevron') return { pieces: [{ pts: chevronBand(drawn, c.pitch), color: 0, fill: true, width: 1 }],
-    tips: { start: [drawn[0]], end: [drawn[drawn.length - 1]] } }
   const L = lengths(drawn).at(-1) ?? 0, P = Math.max(4, c.pitch), zig = c.style === 'zigzag'
   const twisted = c.style !== 'checks', A = amp(c.n, w), os = offsets(c.n, w)
   const body = resample(drawn, Math.min(P / 12, 6)), ns = normals(body.pts)
@@ -64,18 +87,27 @@ export function cable(drawn: XY[], c: Cable, w: number): { pieces: Piece[], tips
     return { pts: body.pts.map((p, i) => [p[0] + ns[i][0] * f(body.s[i]), p[1] + ns[i][1] * f(body.s[i])]), s: body.s }
   })
   // legs: from each strand's end out to its point, leaving along the line, then octilinear
-  const legOut = (st: Strand, at: 'start' | 'end', to: XY | null | undefined) => {
+  // a fanned leg goes out at 45° first, then on beside the others
+  const legOut = (st: Strand, at: 'start' | 'end', to: XY | null | undefined, fan = false) => {
     if (!to) return
     const k = at === 'start' ? 0 : st.pts.length - 1, e = st.pts[k], end = at === 'start' ? drawn[0] : drawn.at(-1)!
     const u = pointAt(drawn, at === 'start' ? 0 : L).u, dir: XY = at === 'start' ? [-u[0], -u[1]] : u
     const target: XY = [end[0] + to[0], end[1] + to[1]]
     if (dist(e, target) < 1e-6) return
-    const leg = resample(round(octi(e, target, undefined, dir), 2 * w), Math.min(P / 12, 6))
+    // fanned: the leg order that ends running along the line, so the fanned strands end side by side
+    const along = (pts: XY[]) => { const v = unit(sub(pts[pts.length - 1], pts[pts.length - 2]))
+      return Math.abs(v[0] * dir[1] - v[1] * dir[0]) < 1e-6 }
+    const both = [octi(e, target, true), octi(e, target, false)], legs = fan ? both.find(along) ?? both[0]
+      : octi(e, target, undefined, dir)
+    const leg = resample(round(legs, 2 * w), Math.min(P / 12, 6))
     const s0 = st.s[k], sg = at === 'start' ? -1 : 1, pts = leg.pts.slice(1), s = leg.s.slice(1).map(v => s0 + sg * v)
     if (at === 'start') { st.pts.unshift(...pts.reverse()); st.s.unshift(...s.reverse()) }
     else { st.pts.push(...pts); st.s.push(...s) }
   }
-  strands.forEach((st, j) => { legOut(st, 'start', c.legs?.start?.[j]); legOut(st, 'end', c.legs?.end?.[j]) })
+  strands.forEach((st, j) => (['start', 'end'] as const).forEach(end => {
+    const own = c.legs?.[end]?.[j]
+    legOut(st, end, own ?? fanLeg(c, drawn, end, j), !own)
+  }))
   const pieces: Piece[] = strands.map((st, j) => ({ pts: st.pts, color: twisted ? (j % 2) as 0 | 1 : 0 }))
   // checks: every other check of every strand in the second colour, shifted strand to strand;
   // a twisted pair: the first strand back on top at every other crossing (over, under, over)
@@ -134,8 +166,17 @@ export function ribbons(strands: Strand[], w: number, half: number, shift: numbe
 /** Direction chevrons along a line: one every `every`, pointing along, h tall. */
 export function chevrons(drawn: XY[], h: number, every: number): XY[][] {
   const L = lengths(drawn).at(-1) ?? 0, n = Math.floor(L / every), out: XY[][] = []
+  // on a bend one would twist: the nearest spot along where the line runs straight, else none
+  const bent = (s: number) => {
+    const a = pointAt(drawn, s - h).u, b = pointAt(drawn, s + h).u
+    return a[0] * b[0] + a[1] * b[1] < 0.9999
+  }
   for (let k = 0; k < n; k++) {
-    const { p, u } = pointAt(drawn, (L - (n - 1) * every) / 2 + k * every), v: XY = [-u[1], u[0]]
+    const mid = (L - (n - 1) * every) / 2 + k * every
+    const tries = [0, ...Array.from({ length: 8 }, (_, i) => (i + 1) * every / 16).flatMap(d => [d, -d])]
+    const at = tries.map(d => mid + d).find(v => v > h && v < L - h && !bent(v))
+    if (at === undefined) continue
+    const { p, u } = pointAt(drawn, at), v: XY = [-u[1], u[0]]
     const back: XY = [p[0] - u[0] * h / 2, p[1] - u[1] * h / 2]
     out.push([[back[0] + v[0] * h, back[1] + v[1] * h], [p[0] + u[0] * h / 2, p[1] + u[1] * h / 2],
       [back[0] - v[0] * h, back[1] - v[1] * h]])

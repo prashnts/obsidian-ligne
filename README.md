@@ -34,7 +34,12 @@ shapes moved with its tools get its smart guides. Lane gap (slider, `-` `=`): a 
 further out; in select mode `-` `=` move the selected lines out / in on their lanes.
 
 Line bodies (`w` on/off, `⇧W` next, or the popover): twisted round / zigzag, colour checks, chevron band
-(git-flow style, width slider), ribbon, FFC. Strands in the stroke colour and Excalidraw's background
+(git-flow style, width slider), ribbon, FFC, jacket. The popover edits the selected lines when there
+are some (its *For* row says which), else sets up the next line. Twisted ends fan out evenly (popover:
+start / end / both, spread, length): 45° out, then side by side. A jacket is a round sheathed cable
+true to size (2.5–8 mm, wires inside in USB or other colours, shield); its ends: stripped (braid,
+spread wires, tinned tips), into a Dupont F / M, JST, SH or MX housing, or a USB-C, USB-A, micro-B,
+barrel, 3.5 mm or RJ45 plug. Strands in the stroke colour and Excalidraw's background
 colour (white checks when none); stacked cables keep a gap. Near a cable, drag a strand's end dot to bend
 its leg out to a pin; drop it back to reset.
 Flat cables (*ribbon* / *ffc*) are drawn true to size at 96 dpi (× 1/2/4), so folds show as they will be:
@@ -45,16 +50,16 @@ the connector at both ends (none, Dupont, JST PH, SH, MX 1.25; FFC: ZIF), or at 
 pointer. At a flat cable's end, click a wire: a bundle of it goes on (click another wire: up to it; all
 of them, or ⇧-click: the cable itself). Drag a wire to fan it out; click a fanned wire: a plain line
 goes on from it. Click a cable's body to branch off it. By the pointer, a hint says what a click does.
-`⇧T` text along the line, repeated (knocked out of thin lines, inside thick ones). `d` direction
+Text along a line, repeated (knocked out of thin lines, inside thick ones): label tool *along* (`⇧T`). `d` direction
 chevrons, `a` arrowheads.
 
 `s` stations (`1-4` stop/interchange/commit/net flag, `b` boxed label), following their line's colour.
-`t` labels: `1-5` text, box, rounded box, net label (KiCad local: on the wire), flag (KiCad global: at a
-line end, pointing away); on a line they read along it, on it or beside it (`b`); `f` solid; font and
+`t` labels: `1-6` text, box, rounded box, net label (KiCad local: on the wire), flag (KiCad global: at a
+line end, pointing away), along (click a line: its repeated text); on a line they read along it, on it or beside it (`b`); `f` solid; font and
 size in the popover (Cascadia mono by default). Boxes are Excalidraw containers: double-click edits,
 Excalidraw turns and moves them; `r` / `⇧R` in select mode turns the selection 90° / 45°.
-`x` perfboard: `1` drag out a board (2.54 mm holes, true size ×1/2/4), `2-9` resistor, cap, diode, LED,
-header, DIP, TO-92, module: click the first hole, then the last (TO-92: its middle), then ref and value
+`x` perfboard: `1` drag out a board (2.54 mm holes, true size ×1/2/4), `2-9`, `0` resistor, cap, diode,
+LED, male pin header, female socket, DIP, TO-92, module: click the first hole, then the last (TO-92: its middle), then ref and value
 (`R3 10k`). Lines over a board snap to its holes (wires). Parts moved or turned with Excalidraw go back
 onto the holes.
 `k` legend, `p`/`P` A5/A6 frame (`o` landscape). `⇧C` copies the selection (else all) as SVG; the
