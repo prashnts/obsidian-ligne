@@ -25,3 +25,10 @@
 .ligne-help kbd { justify-self: end; font: 600 11px var(--ui-font, system-ui); opacity: .75; }
 .ligne-guide { stroke-dasharray: 3 4; opacity: .5; }
 .ligne-snap.lane { fill: #fff; stroke: #e8590c; }
+.ligne-live { opacity: .85; }
+.ligne-stop { fill: #fff; stroke: #1971c2; stroke-width: 1.5; }
+.ligne-hover { opacity: .18; }
+.ligne-snap.tip { fill: #fff; stroke: #2f9e44; }
+.ligne-snap.tip.end { fill: #2f9e44; }
+.ligne-input { position: absolute; z-index: 5; transform: translate(-50%, -50%); width: 14ch; padding: 2px 6px;
+  font: 13px var(--ui-font, system-ui); border: 1px solid #1971c2; border-radius: 6px; background: #fff; color: #1e1e1e; }

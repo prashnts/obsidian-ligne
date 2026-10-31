@@ -9,8 +9,9 @@
     "build": "tsc --noEmit && node esbuild.config.mjs --vault test-vault",
     "headless": "tools/headless.sh",
     "release": "npm run build && rm -rf release && mkdir -p release/ligne && cp main.js manifest.json styles.css release/ligne/ && cd release && zip -qr ligne.zip ligne && echo release/ligne.zip",
-    "test": "node tools/run.mjs --test src/core/*.test.ts",
-    "check": "tsc --noEmit"
+    "test": "node tools/run.mjs --test src/core/*.test.ts src/*.test.ts",
+    "check": "tsc --noEmit",
+    "version": "node tools/version.mjs && git add manifest.json versions.json"
   },
   "license": "MIT",
   "dependencies": {

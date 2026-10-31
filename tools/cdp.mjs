@@ -63,9 +63,14 @@ else if (cmd === 'shot') {
   for (const step of arg.split(';').map(s => s.trim()).filter(Boolean)) {
     const [op, a = ''] = step.split(/\s+/), [x, y] = a.split(',').map(Number)
     if (op === 'key') {
-      const text = a.length === 1 ? a : undefined
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: a, text, windowsVirtualKeyCode: a === 'Enter' ? 13 : a === 'Escape' ? 27 : 0 })
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: a })
+      // ctrl+z, shift+ctrl+z: modifiers before the key
+      const parts = a.split('+'), k = parts.pop(), mods = { alt: 1, ctrl: 2, meta: 4, shift: 8 }
+      const modifiers = parts.reduce((m, p) => m | (mods[p.toLowerCase()] ?? 0), 0)
+      const text = k.length === 1 && !(modifiers & 7) ? k : undefined
+      const code = k.length === 1 ? k.toUpperCase().charCodeAt(0) : { Enter: 13, Escape: 27, Backspace: 8, Delete: 46 }[k] ?? 0
+      const ev = { key: k, modifiers, windowsVirtualKeyCode: code, code: k.length === 1 ? 'Key' + k.toUpperCase() : k }
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', text, ...ev })
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', ...ev })
     } else if (op === 'move') await mouse('mouseMoved', x, y)
     else for (let n = 1; n <= (op === 'dbl' ? 2 : 1); n++) { await mouse('mousePressed', x, y, n); await mouse('mouseReleased', x, y, n) }
   }

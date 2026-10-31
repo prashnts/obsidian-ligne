@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { graph, toText, type El } from './graph.ts'
-import { beside, concentric, dist, nearest, octi, offset, offsetAt, round, simplify, snap8, twist, type XY } from './geom.ts'
+import { beside, carry, concentric, diagFirst, dist, isDiag, nearest, octi, octiPoint, offset, offsetAt, pointAt, resample, round,
+  simplify, snap8, upright, type XY } from './geom.ts'
 
 const near = (a: XY, b: XY) => assert.ok(dist(a, b) < 1e-6, `${a} ≉ ${b}`)
 const angles = (pts: XY[]) => pts.slice(1).map((p, i) => Math.atan2(p[1] - pts[i][1], p[0] - pts[i][0]))
@@ -48,6 +49,7 @@ test('graph: stations ordered along their line, labels carry data', () => {
       { id: id + 't', type: 'text', x, y: 0, width: 0, height: 0, text, groupIds: [id + 'g'] }]),
   ]
   const g = graph(els)
+  assert.deepEqual(g.labels, [])
   assert.deepEqual(g.stations.map(s => [s.label, s.km]), [['Head', 20], ['J3 · FFC', 80]])
   assert.deepEqual(g.stations[1].data, { pitch: '0.5mm' })
   assert.equal(toText(g), 'line L #000 w=4\n  10,10 110,10\n  stop Head @30,10 km=20\n'
@@ -64,8 +66,42 @@ test('offset: parallels bend at the same place, around the same centres', () => 
   assert.deepEqual(beside(p, [40, -6]), { i: 0, t: 0.4, d: -6 })
 })
 
-test('twist: two strands crossing every pitch', () => {
-  const [a, b] = twist([[0, 0], [80, 0]], 3, 20)
-  near(a[0], [0, 0]); near(a[a.length - 1], [80, 0])
-  near(a[4], [10, 3]); near(b[4], [10, -3])
+test('diagFirst: least turn from the incoming direction, straight first without one', () => {
+  assert.equal(diagFirst([0, 0], [10, 4]), false)
+  assert.equal(diagFirst([0, 0], [10, 4], [0, 1]), true)
+  assert.equal(diagFirst([0, 0], [10, 4], [1, 0]), false)
+})
+
+test('isDiag and upright', () => {
+  assert.equal(isDiag([10, 1]), false); assert.equal(isDiag([10, 9]), true); assert.equal(isDiag([-3, 4]), true)
+  assert.ok(Math.abs(upright([-1, 0])) < 1e-9)                       // right to left reads left to right
+  assert.ok(Math.abs(upright([0, -1]) - Math.PI / 2) < 1e-9)         // up reads like down
+  assert.ok(Math.abs(upright([1, 1]) - Math.PI / 4) < 1e-9)
+})
+
+test('octiPoint: both legs stay octilinear', () => {
+  const prev: XY = [0, 0], next: XY = [100, 40]
+  const q = octiPoint([52, 37], prev, next)
+  for (const [a, b] of [[prev, q], [q, next]]) {
+    const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) / (Math.PI / 4)
+    assert.ok(Math.abs(ang - Math.round(ang)) < 1e-9, `${a} → ${b}`)
+  }
+  assert.ok(dist(q, [52, 37]) < 20)
+  near(octiPoint([10, 3], [0, 0]), [10, 0])
+})
+
+test('carry: free neighbours shift so their legs keep directions', () => {
+  // vertical leg up from the moved point, then a horizontal one: shifting right moves only the next
+  const pts: XY[] = [[0, 0], [0, 50], [100, 50]]
+  const out = carry(pts, 0, [3, 0], () => false)
+  near(out[1], [3, 50]); near(out[2], [100, 50])
+  // pinned neighbours stay
+  near(carry(pts, 0, [3, 0], i => i === 1)[1], [0, 50])
+})
+
+test('resample and pointAt', () => {
+  const r = resample([[0, 0], [10, 0], [10, 10]], 4)
+  assert.deepEqual(r.s.map(Math.round), [0, 3, 7, 10, 13, 17, 20])
+  const { p, u } = pointAt([[0, 0], [10, 0], [10, 10]], 15)
+  near(p, [10, 5]); near(u, [0, 1])
 })

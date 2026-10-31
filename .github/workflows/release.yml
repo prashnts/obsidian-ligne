@@ -1,0 +1,31 @@
+# Push a tag equal to manifest.json's version (npm version x.y.z makes both): builds, tests and
+# publishes a GitHub release with the files Obsidian installs (main.js, manifest.json, styles.css)
+# and ligne.zip for a manual install.
+name: release
+on:
+  push:
+    tags: ['*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - name: Tag matches the manifest
+        run: |
+          v=$(node -p "require('./manifest.json').version")
+          [ "$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, manifest $v"; exit 1; }
+      - run: npm run release
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes \
+            main.js manifest.json styles.css release/ligne.zip

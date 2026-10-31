@@ -4,7 +4,8 @@ export type XY = [number, number]
 const EPS = 1e-6
 const sub = (a: XY, b: XY): XY => [a[0] - b[0], a[1] - b[1]]
 const len = (v: XY) => Math.hypot(v[0], v[1])
-const unit = (v: XY): XY => { const l = len(v) || 1; return [v[0] / l, v[1] / l] }
+export const unit = (v: XY): XY => { const l = len(v) || 1; return [v[0] / l, v[1] / l] }
+const dot = (a: XY, b: XY) => a[0] * b[0] + a[1] * b[1]
 export const dist = (a: XY, b: XY) => len(sub(a, b))
 export const same = (a: XY, b: XY) => dist(a, b) < EPS
 
@@ -16,21 +17,36 @@ export function snap8(a: XY, p: XY): XY {
   return [a[0] + u[0] * t, a[1] + u[1] * t]
 }
 
-/** a → b as one straight and one 45° leg. Which one comes first: `diagFirst`, or else the one
- *  turning least from the incoming direction `inDir` (metro lines avoid sharp turns). */
-export function octi(a: XY, b: XY, diagFirst?: boolean, inDir?: XY): XY[] {
+/** The two corners a → b can bend at: after the 45° leg, or after the straight one. */
+function corners(a: XY, b: XY): [XY, XY] {
   const d = sub(b, a), m = Math.min(Math.abs(d[0]), Math.abs(d[1]))
   const diag: XY = [Math.sign(d[0]) * m, Math.sign(d[1]) * m]
-  const viaDiag: XY = [a[0] + diag[0], a[1] + diag[1]], viaStraight: XY = [b[0] - diag[0], b[1] - diag[1]]
-  if (diagFirst === undefined) {
-    if (!inDir) diagFirst = false
-    else {
-      const turn = (p: XY) => { const u = unit(sub(p, a)); return -(u[0] * inDir[0] + u[1] * inDir[1]) }
-      diagFirst = turn(viaDiag) < turn(viaStraight)
-    }
-  }
-  const mid = diagFirst ? viaDiag : viaStraight
+  return [[a[0] + diag[0], a[1] + diag[1]], [b[0] - diag[0], b[1] - diag[1]]]
+}
+
+/** Whether a → b should start with its 45° leg: the order turning least from the incoming
+ *  direction `inDir` (metro lines avoid sharp turns); straight first without one. */
+export function diagFirst(a: XY, b: XY, inDir?: XY): boolean {
+  if (!inDir) return false
+  const turn = (p: XY) => same(p, a) ? 0 : -dot(unit(sub(p, a)), inDir)
+  const [viaDiag, viaStraight] = corners(a, b)
+  return turn(viaDiag) < turn(viaStraight)
+}
+
+/** a → b as one straight and one 45° leg; `diag`: the 45° one first (default: see diagFirst). */
+export function octi(a: XY, b: XY, diag?: boolean, inDir?: XY): XY[] {
+  const [viaDiag, viaStraight] = corners(a, b)
+  const mid = diag ?? diagFirst(a, b, inDir) ? viaDiag : viaStraight
   return same(mid, a) || same(mid, b) ? [a, b] : [a, mid, b]
+}
+
+/** Whether v points nearest to one of the four diagonals. */
+export const isDiag = (v: XY) => Math.round(Math.atan2(v[1], v[0]) / (Math.PI / 4)) % 2 !== 0
+
+/** Angle of direction u turned to read left to right: in (-90°, 90°]. */
+export function upright(u: XY): number {
+  const a = Math.atan2(u[1], u[0])
+  return a > Math.PI / 2 + EPS ? a - Math.PI : a <= -Math.PI / 2 + EPS ? a + Math.PI : a
 }
 
 /** Unit direction of the last leg, if any. */
@@ -133,19 +149,77 @@ export function beside(pts: XY[], p: XY): { i: number, t: number, d: number } {
   return { i: n.i, t: l ? dist(a, n.q) / l : 0, d: (p[0] - n.q[0]) * nl[0] + (p[1] - n.q[1]) * nl[1] }
 }
 
-/** Twisted pair along a (rounded) polyline: two strands crossing every `pitch`, ±amp apart. */
-export function twist(pts: XY[], amp: number, pitch: number): [XY[], XY[]] {
-  const a: XY[] = [], b: XY[] = [], step = pitch / 8
-  let s = 0
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p = pts[i], l = dist(p, pts[i + 1]), u = unit(sub(pts[i + 1], p)), nl = left(u)
-    for (let x = 0; x < l || (i === pts.length - 2 && x <= l); x += step) {
-      const k = Math.min(x, l), w = amp * Math.sin(Math.PI * (s + k) / pitch)
-      const q: XY = [p[0] + u[0] * k, p[1] + u[1] * k]
-      a.push([q[0] + nl[0] * w, q[1] + nl[1] * w]); b.push([q[0] - nl[0] * w, q[1] - nl[1] * w])
-      if (k === l) break
+/** Cumulative length at each point of a polyline. */
+export function lengths(pts: XY[]): number[] {
+  const out = [0]
+  for (let i = 1; i < pts.length; i++) out.push(out[i - 1] + dist(pts[i - 1], pts[i]))
+  return out
+}
+
+/** Left normal at each point, mitred on bends so that offsets keep their distance from both legs. */
+export function normals(pts: XY[]): XY[] {
+  const legs = pts.slice(1).map((p, i) => left(unit(sub(p, pts[i]))))
+  return pts.map((_, i) => {
+    const a = legs[Math.max(0, i - 1)] ?? [0, 1], b = legs[Math.min(legs.length - 1, i)] ?? a
+    const m = unit([a[0] + b[0], a[1] + b[1]]), c = Math.max(0.3, dot(m, a))
+    return [m[0] / c, m[1] / c] as XY
+  })
+}
+
+/** pts with points added so that no leg is longer than step; `s`: length along at each. */
+export function resample(pts: XY[], step: number): { pts: XY[], s: number[] } {
+  const out: XY[] = pts.length ? [pts[0]] : [], s: number[] = pts.length ? [0] : []
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], l = dist(a, b), k = Math.max(1, Math.ceil(l / step)), s0 = s[s.length - 1]
+    for (let j = 1; j <= k; j++) {
+      out.push([a[0] + (b[0] - a[0]) * j / k, a[1] + (b[1] - a[1]) * j / k]); s.push(s0 + l * j / k)
     }
-    s += l
   }
-  return [a, b]
+  return { pts: out, s }
+}
+
+/** Point and unit direction at length s along a polyline (clamped to its ends). */
+export function pointAt(pts: XY[], s: number): { p: XY, u: XY } {
+  let i = 0
+  for (; i < pts.length - 2; i++) {
+    const l = dist(pts[i], pts[i + 1])
+    if (s <= l) break
+    s -= l
+  }
+  const a = pts[i], b = pts[i + 1] ?? a, l = dist(a, b), t = l ? Math.max(0, Math.min(1, s / l)) : 0
+  return { p: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], u: unit(sub(b, a)) }
+}
+
+/** The four line directions. */
+const DIRS: XY[] = [[1, 0], [0, 1], [Math.SQRT1_2, Math.SQRT1_2], [Math.SQRT1_2, -Math.SQRT1_2]]
+
+/** The point nearest p from which both prev and next are reached by one octilinear leg (a waypoint
+ *  moved between two others keeps both its legs at 45° multiples). */
+export function octiPoint(p: XY, prev?: XY, next?: XY): XY {
+  if (!prev || !next) return prev ?? next ? snap8((prev ?? next)!, p) : p
+  let best: XY = snap8(prev, p), bd = Infinity
+  for (const u of DIRS) for (const v of DIRS) {
+    const den = u[0] * v[1] - u[1] * v[0]
+    if (Math.abs(den) < EPS) continue
+    // prev + u a = next + v b
+    const w = sub(next, prev), a = (w[0] * v[1] - w[1] * v[0]) / den, q: XY = [prev[0] + u[0] * a, prev[1] + u[1] * a]
+    if (dist(q, p) < bd) { bd = dist(q, p); best = q }
+  }
+  return best
+}
+
+/** Waypoint j moved by `by`: its unpinned neighbours, run by run, shift by the part of the move
+ *  across their leg, so legs keep their directions (a leg along the move just stretches). */
+export function carry(pts: XY[], j: number, by: XY, pinned: (i: number) => boolean): XY[] {
+  const out = pts.slice()
+  for (const step of [-1, 1]) {
+    let d = by
+    for (let i = j + step; i >= 0 && i < pts.length && !pinned(i); i += step) {
+      const u = unit(sub(pts[i], pts[i - step])), n = left(u), k = dot(d, n)
+      if (Math.abs(k) < 1e-6) break
+      d = [n[0] * k, n[1] * k]
+      out[i] = [pts[i][0] + d[0], pts[i][1] + d[1]]
+    }
+  }
+  return out
 }

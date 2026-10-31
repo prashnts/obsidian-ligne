@@ -1,33 +1,42 @@
 // The metro graph read back out of drawn elements, and its text form.
 // Elements are Excalidraw-shaped, but only these fields are read, so any host with them works.
+import type { Cable } from './cable.ts'
 import { nearest, type XY } from './geom.ts'
 
 export type Shape = 'stop' | 'interchange' | 'commit' | 'net'
 
-/** Where a waypoint sits on another line's lane: that line, leg, fraction along it, offset left. */
+/** Where a waypoint sits on another line's lane: that line (its lid), leg, fraction, offset left. */
 export interface Link { of: string, i: number, t: number, d: number }
 
-/** customData.ligne of a line or zone: waypoints relative to the element's x, y, a bend radius per
- *  waypoint (else r), waypoints that follow a lane of another line, extras drawn with it. */
+/** customData.ligne of a line or zone. `lid`: its ligne id, kept when Excalidraw re-ids elements
+ *  (paste, duplicate), so links, branches and stations refer to lids. Waypoints are relative to the
+ *  element's x, y, with a bend radius each (else r); links: waypoints on a lane of another line;
+ *  from / to: the lines it starts / ends on; extras (cable strands, ticks) share group `own`;
+ *  np, box: the drawn points, to notice edits made outside ligne. `twist`: before cables. */
 export interface LineData {
-  kind: 'line' | 'zone', path: XY[], r: number, radii?: number[], links?: (Link | null)[], from?: string,
-  twist?: boolean, ticks?: boolean, arrow?: boolean, own?: string, stack?: string,
-  box?: [number, number, number, number],
+  kind: 'line' | 'zone', lid?: string, path: XY[], r: number, radii?: number[], links?: (Link | null)[],
+  from?: string, to?: string, cable?: Cable, twist?: boolean, ticks?: boolean, arrow?: boolean,
+  own?: string, stack?: string, np?: number, box?: [number, number, number, number],
 }
 /** customData.ligne of a station dot; its label is the text element in the same group. */
 export interface StationData { kind: 'station', line?: string, shape: Shape }
+/** customData.ligne of a label on a line: its text and the knockout behind it. */
+export interface LabelData { kind: 'label', line?: string, on: boolean }
 
 export interface El {
-  id: string, type: string, x: number, y: number, width: number, height: number, isDeleted?: boolean
+  id: string, type: string, x: number, y: number, width: number, height: number, isDeleted?: boolean, angle?: number
   strokeColor?: string, strokeWidth?: number, strokeStyle?: string, backgroundColor?: string, points?: readonly XY[], text?: string, groupIds?: readonly string[], customData?: any
 }
 
-export interface Line { id: string, color: string, width: number, dash: string, path: XY[], from?: string }
+export interface Line {
+  id: string, color: string, width: number, dash: string, path: XY[], from?: string, to?: string, cable?: string
+}
 export interface Zone { id: string, color: string, fill: string, path: XY[] }
 export interface Station {
   id: string, line?: string, shape: Shape, at: XY, label: string, data: Record<string, string>, km?: number
 }
-export interface Graph { lines: Line[], stations: Station[], zones: Zone[] }
+export interface Label { id: string, line?: string, text: string, at: XY }
+export interface Graph { lines: Line[], stations: Station[], zones: Zone[], labels: Label[] }
 
 const abs = (e: El, ps: readonly XY[]) => ps.map(([x, y]) => [x + e.x, y + e.y] as XY)
 const kind = (e: El) => !e.isDeleted && e.customData?.ligne?.kind
@@ -51,15 +60,17 @@ function along(pts: XY[], p: XY) {
 }
 
 export function graph(elements: readonly El[]): Graph {
-  const lines: Line[] = [], zones: Zone[] = [], drawn = new Map<string, XY[]>()
+  const lines: Line[] = [], zones: Zone[] = [], drawn = new Map<string, XY[]>(), lid = new Map<string, string>()
   for (const e of elements) {
     const d = e.customData?.ligne as LineData, k = kind(e)
     if (k === 'zone')
       zones.push({ id: e.id, color: e.strokeColor ?? '', fill: e.backgroundColor ?? '', path: abs(e, d.path) })
     if (k !== 'line') continue
-    lines.push({ id: e.id, color: e.strokeColor ?? '', width: e.strokeWidth ?? 2, dash: e.strokeStyle ?? 'solid',
-      path: abs(e, d.path), from: d.from })
-    drawn.set(e.id, abs(e, e.points ?? d.path))
+    const id = d.lid ?? e.id, cable = d.cable ? `${d.cable.style}x${d.cable.n}` : d.twist ? 'roundx2' : undefined
+    lines.push({ id, color: e.strokeColor ?? '', width: e.strokeWidth ?? 2, dash: e.strokeStyle ?? 'solid',
+      path: abs(e, d.path), from: d.from, to: d.to, cable })
+    drawn.set(id, abs(e, e.points ?? d.path))
+    lid.set(e.id, id)                                   // stations made before lids refer to element ids
   }
   const texts = elements.filter(e => e.type === 'text' && !e.isDeleted)
   const stations: Station[] = []
@@ -68,13 +79,16 @@ export function graph(elements: readonly El[]): Graph {
     const d = e.customData.ligne as StationData
     const at: XY = d.shape === 'net' && e.points ? abs(e, [e.points[0]])[0] : [e.x + e.width / 2, e.y + e.height / 2]
     const t = texts.find(t => t.groupIds?.some(g => e.groupIds?.includes(g)))
-    const pts = d.line ? drawn.get(d.line) : undefined
-    stations.push({ id: e.id, line: d.line, shape: d.shape, at, ...parseLabel(t?.text ?? ''),
+    const line = d.line && (lid.get(d.line) ?? d.line), pts = line ? drawn.get(line) : undefined
+    stations.push({ id: e.id, line: line || undefined, shape: d.shape, at, ...parseLabel(t?.text ?? ''),
       km: pts && Math.round(along(pts, at)) })
   }
   // stations in order along their line
   stations.sort((a, b) => (a.line ?? '').localeCompare(b.line ?? '') || (a.km ?? 0) - (b.km ?? 0))
-  return { lines, stations, zones }
+  const labels = texts.filter(t => kind(t) === 'label').map(t => ({ id: t.id,
+    line: lid.get(t.customData.ligne.line) ?? t.customData.ligne.line,
+    text: t.text ?? '', at: [t.x + t.width / 2, t.y + t.height / 2] as XY }))
+  return { lines, stations, zones, labels }
 }
 
 const xy = (p: XY) => `${Math.round(p[0])},${Math.round(p[1])}`
@@ -90,9 +104,11 @@ export function toText(g: Graph): string {
     + Object.entries(s.data).map(([k, v]) => ` ${q(k)}=${q(v)}`).join('')
   const out: string[] = []
   for (const l of g.lines) {
-    const dash = l.dash === 'solid' ? '' : ' ' + l.dash, from = l.from ? ` from=${l.from}` : ''
-    out.push(`line ${l.id} ${l.color} w=${l.width}${dash}${from}`, '  ' + l.path.map(xy).join(' '))
+    const opt = [l.dash === 'solid' ? '' : l.dash, l.cable && `cable=${l.cable}`, l.from && `from=${l.from}`,
+      l.to && `to=${l.to}`].filter(Boolean).map(v => ' ' + v).join('')
+    out.push(`line ${l.id} ${l.color} w=${l.width}${opt}`, '  ' + l.path.map(xy).join(' '))
     out.push(...g.stations.filter(s => s.line === l.id).map(st))
+    out.push(...g.labels.filter(t => t.line === l.id).map(t => `  label ${q(t.text)} @${xy(t.at)}`))
   }
   const loose = g.stations.filter(s => !s.line || !g.lines.some(l => l.id === s.line))
   if (loose.length) out.push('stations', ...loose.map(st))

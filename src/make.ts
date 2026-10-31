@@ -1,7 +1,7 @@
 // Excalidraw element skeletons ligne adds: station marks with labels, net flags, legend, paper frames.
 // Everything goes through the host's convertToExcalidrawElements, then text ids are shortened.
 import type { XY } from './core/geom.ts'
-import type { Shape, StationData } from './core/graph.ts'
+import type { LabelData, Shape, StationData } from './core/graph.ts'
 
 /** Excalidraw's convertToExcalidrawElements, from whichever bundle the host ships. */
 export type Convert = (skeletons: any[]) => any[]
@@ -21,7 +21,7 @@ export interface Font { fontFamily: number, fontSize: number }
 export const fontOf = (s: any): Font => ({ fontFamily: s.currentItemFontFamily, fontSize: s.currentItemFontSize })
 const ink = (f: Font) => ({ ...f, strokeColor: '#1e1e1e' })
 const ID = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-const shortId = () => Array.from({ length: 8 }, () => ID[Math.random() * ID.length | 0]).join('')
+export const shortId = () => Array.from({ length: 8 }, () => ID[Math.random() * ID.length | 0]).join('')
 export const groupId = () => Math.random().toString(36).slice(2, 10)
 
 /** New element version, so Excalidraw's history and sync see the change. */
@@ -68,6 +68,26 @@ export function station(convert: Convert, o: { at: XY, shape: Shape, color: stri
     : { type: 'text', x: x + dot.d, y: y - dot.d - o.font.fontSize * 1.25, text: o.text, ...ink(o.font), groupIds: [g] }
   const els = make(convert, [mark, label])
   return els.map(e => ({ ...e, groupIds: [g] }))         // bound text too
+}
+
+/** Text on a line at `at`, turned to read along it (angle): on the line, with a knockout box in
+ *  the paper colour behind it, or beside it, `off` away from its centre. Grouped, text last. */
+export function lineLabel(convert: Convert, o: { at: XY, angle: number, text: string, font: Font, color: string,
+  paper: string, line?: string, on: boolean, off: number }): any[] {
+  // the knockout only breaks the line itself (off: half its width), not its neighbours
+  const g = groupId(), data: LabelData = { kind: 'label', line: o.line, on: o.on }
+  const [t] = make(convert, [{ type: 'text', x: 0, y: 0, text: o.text, ...o.font, strokeColor: o.color }])
+  // beside: moved up the page, across the line
+  const n: XY = [Math.sin(o.angle), -Math.cos(o.angle)], k = o.on ? 0 : o.off + t.height / 2 + 2
+  const c: XY = [o.at[0] + n[0] * k, o.at[1] + n[1] * k]
+  const tag = { groupIds: [g], angle: o.angle, customData: { ligne: data } }
+  const text = { ...t, x: c[0] - t.width / 2, y: c[1] - t.height / 2, ...tag }
+  if (!o.on) return [text]
+  const pw = t.width + t.height * 0.6, ph = Math.min(t.height + 2, 2 * o.off + 2)
+  const [knock] = convert([{ type: 'rectangle', x: c[0] - pw / 2, y: c[1] - ph / 2, width: pw, height: ph,
+    strokeColor: 'transparent', backgroundColor: o.paper, fillStyle: 'solid', strokeWidth: 1, roughness: 0,
+    roundness: { type: 3 }, ...tag }])
+  return [knock, text]
 }
 
 /** Legend: one row per line style (a sample and its name), framed, all grouped.
