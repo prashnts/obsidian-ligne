@@ -22,9 +22,14 @@ const COLORS: Record<Exclude<WireSet, 'mono'>, string[]> = {
     '#1e1e1e'],
 }
 
+/** Wire colours of a set, for a sample (mono: the line colour, striped). */
+export const swatch = (set: WireSet, base: string) => set === 'mono' ? [base, '#ffffff', base, base] : COLORS[set]
+
 export type Conn = 'none' | 'dupont' | 'jst' | 'sh' | 'mx' | 'zif'
 export const CONNS: Record<'ribbon' | 'ffc', Conn[]> = {
-  ribbon: ['dupont', 'jst', 'sh', 'mx', 'none'], ffc: ['none', 'zif'] }
+  ribbon: ['none', 'dupont', 'jst', 'sh', 'mx'], ffc: ['none', 'zif'] }
+export const CONN_NAMES: Record<Conn, string> = {
+  none: 'none', dupont: 'Dupont', jst: 'JST PH', sh: 'SH', mx: 'MX 1.25', zif: 'ZIF' }
 /** Housings in mm: pin pitch, width beyond the outer pins' centres, depth along the wires (JST = PH,
  *  MX = Molex PicoBlade style 1.25, zif: the FFC's pitch). */
 const HOUSING: Record<Exclude<Conn, 'none'>, { pitch: number, edge: number, depth: number, body: string,

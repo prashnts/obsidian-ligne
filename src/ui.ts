@@ -2,7 +2,9 @@
 // active, an island of options just below the toolbar. Falls back to the top of the host.
 
 const ICONS: Record<string, string> = {
-  ligne: '<path d="M2 15h5l6-6h5"/><circle cx="7" cy="15" r="2"/><circle cx="13" cy="9" r="2"/>',
+  ligne: '<path d="M3 15h4l6-6h4"/>',
+  select: '<path d="M5 3l11 7-5 1-2 5z"/>',
+  sheets: '<path d="M6 3h6l3 3v11H6zM3 6v12h9"/>',
   line: '<path d="M3 15l5-5h5l4-4"/>',
   station: '<path d="M2 10h16"/><circle cx="10" cy="10" r="3.5" fill="var(--island-bg-color, #fff)"/>',
   stop: '<circle cx="10" cy="10" r="4"/>',
@@ -44,10 +46,13 @@ export const icon = (name: string) =>
   `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"`
   + ` stroke-linejoin="round">${ICONS[name]}</svg>`
 
-/** A button: icon, title with its shortcut in brackets, the shortcut in the corner. */
-export interface Btn { icon: string, title: string, key?: string, on?: boolean, text?: string,
+/** A button: icon and / or text (or colour stripes), title with its shortcut in brackets, the
+ *  shortcut in the corner. */
+export interface Btn { icon?: string, title: string, key?: string, on?: boolean, text?: string, swatch?: string[],
   click: (e: MouseEvent) => void }
-export type Item = Btn | HTMLElement | 'sep'
+/** A button opening a popover of labelled rows below it, as Excalidraw's own. */
+export interface Menu extends Btn { open: boolean, rows: { label: string, items: Item[] }[] }
+export type Item = Btn | Menu | HTMLElement | 'sep'
 
 export class Panel {
   private tool = document.createElement('button')
@@ -79,7 +84,7 @@ export class Panel {
     this.mount()
     this.tool.classList.toggle('ToolIcon--checked', active)
     this.box.classList.toggle('on', active)
-    this.box.replaceChildren(...(active ? items.map(i => i === 'sep' ? sep() : i instanceof HTMLElement ? i : btn(i)) : []))
+    this.box.replaceChildren(...(active ? items.map(item) : []))
     if (!active || !help) return
     const card = document.createElement('div')
     card.className = 'Island ligne-help'
@@ -89,13 +94,36 @@ export class Panel {
   }
 }
 
+const item = (i: Item): HTMLElement => i === 'sep' ? sep() : i instanceof HTMLElement ? i : 'rows' in i ? menu(i) : btn(i)
+
 function btn(b: Btn) {
   const x = document.createElement('button')
   x.type = 'button'
   x.className = 'ligne-btn' + (b.on ? ' on' : '')
   x.title = b.title + (b.key ? ` [${b.key}]` : '')
-  x.innerHTML = icon(b.icon) + (b.text ? `<b>${b.text}</b>` : '') + (b.key ? `<kbd>${b.key}</kbd>` : '')
+  const sw = b.swatch?.map(c => `<i style="background:${c}"></i>`).join('')
+  x.innerHTML = (b.icon ? icon(b.icon) : '') + (sw ? `<span class="sw">${sw}</span>` : '')
+    + (b.text ? `<b>${b.text}</b>` : '') + (b.key ? `<kbd>${b.key}</kbd>` : '')
   x.onclick = b.click
   return x
+}
+
+function menu(m: Menu) {
+  const at = document.createElement('span'), b = btn(m)
+  at.className = 'ligne-menu'
+  b.classList.add('drop')
+  b.classList.toggle('open', m.open)
+  at.append(b)
+  if (!m.open) return at
+  const pop = document.createElement('div')
+  pop.className = 'Island ligne-pop'
+  for (const r of m.rows) {
+    const row = document.createElement('div')
+    row.className = 'row'
+    row.append(Object.assign(document.createElement('label'), { textContent: r.label }), ...r.items.map(item))
+    pop.append(row)
+  }
+  at.append(pop)
+  return at
 }
 const sep = () => Object.assign(document.createElement('span'), { className: 'sep' })
