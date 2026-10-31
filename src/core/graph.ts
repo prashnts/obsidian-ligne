@@ -66,7 +66,9 @@ export function graph(elements: readonly El[]): Graph {
     if (k === 'zone')
       zones.push({ id: e.id, color: e.strokeColor ?? '', fill: e.backgroundColor ?? '', path: abs(e, d.path) })
     if (k !== 'line') continue
-    const id = d.lid ?? e.id, cable = d.cable ? `${d.cable.style}x${d.cable.n}` : d.twist ? 'roundx2' : undefined
+    const id = d.lid ?? e.id, c = d.cable, size = c?.style === 'ribbon' ? `/${c.awg ?? 28}awg` : c?.style === 'ffc'
+      ? `/${c.mm ?? .5}mm` : '', ends = size && c?.conn ? `/${c.conn.start ?? 'none'}-${c.conn.end ?? 'none'}` : ''
+    const cable = c ? `${c.style}x${c.n}${size}${ends}` : d.twist ? 'roundx2' : undefined
     lines.push({ id, color: e.strokeColor ?? '', width: e.strokeWidth ?? 2, dash: e.strokeStyle ?? 'solid',
       path: abs(e, d.path), from: d.from, to: d.to, cable })
     drawn.set(id, abs(e, e.points ?? d.path))

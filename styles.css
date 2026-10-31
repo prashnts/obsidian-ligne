@@ -4,7 +4,8 @@
 .ligne-snap { fill: #fff; stroke: #1971c2; stroke-width: 2; }
 .ligne-snap.end, .ligne-snap.point { fill: #1971c2; }
 .excalidraw .Island.ligne-panel { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
-  display: none; gap: 2px; align-items: center; padding: 4px; pointer-events: all; }
+  display: none; gap: 2px; align-items: center; padding: 4px; pointer-events: all;
+  flex-wrap: wrap; justify-content: center; width: max-content; }
 .excalidraw .ligne-panel.on { display: flex; }
 .ligne-panel.loose { top: 64px; z-index: 4; }
 .ligne-panel button.ligne-btn { position: relative; display: flex; align-items: center; gap: 2px; height: 32px; min-width: 32px;
@@ -27,6 +28,7 @@
 .ligne-snap.lane { fill: #fff; stroke: #e8590c; }
 .ligne-live { opacity: .85; }
 .ligne-stop { fill: #fff; stroke: #1971c2; stroke-width: 1.5; }
+.ligne-stop.fold { fill: #e8590c; stroke: #fff; }
 .ligne-hover { opacity: .18; }
 .ligne-snap.tip { fill: #fff; stroke: #2f9e44; }
 .ligne-snap.tip.end { fill: #2f9e44; }

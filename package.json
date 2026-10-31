@@ -1,6 +1,6 @@
 {
   "name": "ligne",
-  "version": "0.2.0",
+  "version": "0.4.3",
   "description": "Metro-map lines, stations and zones drawn over Excalidraw: web page + Obsidian plugin.",
   "private": true,
   "type": "module",

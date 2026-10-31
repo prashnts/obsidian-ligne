@@ -13,9 +13,11 @@
 // Double-click a line to select just it, even inside a stack.
 // Colour, width, dash, sloppiness, fill, arrowheads come from Excalidraw's own style panel (ligne
 // keeps its line or arrow tool selected meanwhile), remembered for ligne apart from other shapes.
-// T makes cables: twisted (round, zigzag) or colour checks, legs at their ends dragged into place.
+// T makes cables: twisted (round, zigzag) or colour checks, legs at their ends dragged into place;
+// flat ones (ribbon, FFC) true to size, folded over with B, split at an end, ending in connectors.
 // S switches to stations, L to labels on lines. G copies the graph as text.
-import { STYLES, cableWidth, type Cable } from './core/cable.ts'
+import { STYLES, cableWidth, type Cable, type CableStyle } from './core/cable.ts'
+import { CONNS, FFC_PITCH, GAUGES, SETS, endOf, flatTips, isFlat, wirePitch, type Conn } from './core/flat.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
   pointAt, round, same, snap8, unit, upright, type XY } from './core/geom.ts'
 import { graph, toText, type Link, type Shape } from './core/graph.ts'
@@ -61,7 +63,11 @@ const HELP: [string, string][] = [
   ['double-click a line', 'select just it, even in a stack'],
   ['Shift / ⇧ button', 'free leg, 8 directions'],
   ['Backspace / Ctrl-Z · Esc', 'undo a stop · cancel, leave'], ['Alt-click / I', "take a line's style"],
-  ['T · ⇧T', 'cable on/off · round, zigzag, checks (2nd colour: Excalidraw background)'],
+  ['T · ⇧T', 'cable on/off · round, zigzag, checks (2nd colour: Excalidraw background), ribbon, FFC'],
+  ['ribbon / FFC', 'true size × scale · W wire colours: mono (white stripe), Qwiic, Grove, rainbow · E gauge / pitch'],
+  ['B · ⇧B (flat)', 'fold at the next corner: turns over, the back shows · bend the other way'],
+  ['C', 'connector: Dupont, JST PH, SH, MX 1.25, none (FFC: ZIF) · over a cable end: that end only'],
+  ['X / Shift-click', 'split: click a wire at a flat cable end (again: the last one), a smaller bundle starts there'],
   ['A / D', 'arrowheads · direction chevrons (the way it was drawn)'],
   ['style', "Excalidraw's panel: colour, width, dash, arrowheads, font"],
   ['S · 1–4 · B', 'stations: stop, interchange, commit, net flag · labels in a box'],
@@ -70,8 +76,8 @@ const HELP: [string, string][] = [
   ['G', 'copy the graph as text'], ['M', 'ligne on / off'], ['?', 'this help'],
 ]
 
-/** A stop: its bend radius and, on another line's lane, where. */
-interface Meta { r: number, link: Link | null }
+/** A stop: its bend radius, on another line's lane where, whether a flat cable folds there. */
+interface Meta { r: number, link: Link | null, fold?: boolean }
 /** A lane beside a line: that line, where along it, the offset, the snapped point. */
 interface Lane { el: any, path: XY[], radii: number[], i: number, t: number, d: number, q: XY }
 /** A ligne line in the scene: element, waypoints, radii, rounded centre line, body width. */
@@ -81,6 +87,11 @@ interface Ln { el: any, path: XY[], radii: number[], drawn: XY[], width: number 
 const straight = (path: XY[], i: number) => {
   const a = path[Math.min(i, path.length - 2)], b = path[Math.min(i, path.length - 2) + 1]
   return Math.abs(a[0] - b[0]) < 1e-6 || Math.abs(a[1] - b[1]) < 1e-6
+}
+/** A line's style for Excalidraw's panel: a flat cable's fill and outline width are its own. */
+const lookOf = (e: any): Partial<Style> => {
+  const { backgroundColor, fillStyle, strokeWidth, ...st } = styleOf(e)
+  return isFlat(cableOf(e)) ? st : styleOf(e)
 }
 const groupOf = (els: readonly any[], m: any) => els.filter(e => e.groupIds?.some((g: string) => m.groupIds?.includes(g)))
 
@@ -106,6 +117,8 @@ export class Ligne {
   free = false                                     // sticky Shift
   snap = true                                      // onto lines and lanes; Ctrl/Cmd held: off
   bend = false                                     // B: the other leg first
+  flip = false                                     // flat cables: fold at the next corner
+  splitting = false                                // flat cables: a click on an end's wire splits
   private mod = false
   private sel: string[] = []                       // lines selected when ligne was turned on
   picking = false                                  // next click takes a line's style
@@ -118,6 +131,8 @@ export class Ligne {
   private from?: string
   private editing?: { id: string, reversed: boolean, n: number }
   private fork?: { u: XY, back: number, fwd: number } // branching: the trunk's leg at the first stop
+  private split?: { el: any, end: 'start' | 'end', q0: number, q1: number, pick?: number[] } // wires by position
+  private startBack = false                        // extending a cable at its start that starts back up
   private press?: { at: XY, grab?: Grab, dragging?: boolean, start: any[] }
   private outside?: Partial<Style>                 // Excalidraw's style while ligne is active
   private tool = ''
@@ -349,8 +364,17 @@ export class Ligne {
       legs = legs.slice(1)
       meta = legs.map((_, i) => i === legs.length - 1 && ln && !free ? this.onLane(ln) : { r: this.r, link: null })
     }
-    return { pts: [...this.pts, ...legs], meta: [...this.meta, ...meta] }
+    const all = [...this.meta, ...meta]
+    if (this.flip && this.flat()) {
+      // the first corner of the leg being drawn: its own bend, else the last stop
+      const i = legs.length > 1 ? n : n - 1, fold = !all[i].fold
+      all[i] = { ...all[i], fold, r: fold ? 0 : this.r }
+    }
+    return { pts: [...this.pts, ...legs], meta: all }
   }
+
+  /** Whether a flat cable (ribbon, FFC) is being drawn. */
+  private flat() { return this.twist && isFlat(this.cable) }
 
   /** Whether the leg from `last` to `to` starts with its 45° leg: the way the pointer left the
    *  stop; else off a lane at 45° to it (it peels off), onto one with the 45° leg last (it curves
@@ -393,6 +417,10 @@ export class Ligne {
   /** Where each strand of a cable ends (its leg tip), per end. */
   private tips(el: any) {
     const c = cableOf(el)!, w = el.strokeWidth, path = pathOf(el), drawn = centre(el)
+    if (isFlat(c)) {
+      const t = flatTips(path, c)
+      return (['start', 'end'] as const).flatMap(end => t[end].map((at, j) => ({ end, j, at })))
+    }
     const tip = (end: 'start' | 'end', j: number): XY => {
       const at = end === 'start' ? path[0] : path[path.length - 1], to = c.legs?.[end]?.[j]
       if (to) return [at[0] + to[0], at[1] + to[1]]
@@ -424,7 +452,8 @@ export class Ligne {
       // the line as it will be: rounded, cable wide, the leg to the pointer included
       const r = this.route(free)
       kids.push(path(round(r.pts, r.meta.map(m => m.r)), 'ligne-live', this.width() * z))
-      kids.push(...r.pts.slice(0, n).map(q => dot(q, 2.5, 'ligne-stop')))
+      kids.push(...r.pts.flatMap((q, i) => i < n || r.meta[i].fold
+        ? [dot(q, r.meta[i].fold ? 4 : 2.5, 'ligne-stop' + (r.meta[i].fold ? ' fold' : ''))] : []))
     }
     const ln = c && n && this.mode === 'line' ? this.lane(c) : undefined
     if (ln) kids.push(path(round(ln.path.map((_, i) => offsetAt(ln.path, i, 0, ln.d)),
@@ -492,7 +521,7 @@ export class Ligne {
     if (pr.dragging) this.drag(pr.grab!, this.scene(e), e.shiftKey, 'IMMEDIATELY')
     else if (this.mode === 'station') this.station(pr.at)
     else if (this.mode === 'label') this.label(pr.at)
-    else this.start(pr.at)
+    else this.start(pr.at, e.shiftKey)
     this.draw()
   }
 
@@ -550,7 +579,8 @@ export class Ligne {
     if (tag) return { kind: 'tag', group: groupOf(els, tag), line: findLine(els, tag.customData.ligne.line) }
     if (this.mode !== 'line') return
     // the nearest leg tip: a cable's tips sit a strand width apart
-    const tip = this.lines().filter(l => cableOf(l.el)).flatMap(l => this.tips(l.el).map(t => ({ ...t, el: l.el })))
+    const tip = this.lines().filter(l => cableOf(l.el) && cableOf(l.el)!.style !== 'ffc')
+      .flatMap(l => this.tips(l.el).map(t => ({ ...t, el: l.el })))
       .map(t => ({ t, d: dist(p, t.at) })).sort((a, b) => a.d - b.d)[0]
     if (tip && tip.d < tol * 0.6) return { kind: 'leg', el: tip.t.el, end: tip.t.end, j: tip.t.j }
     for (const l of this.lines(true)) {
@@ -614,7 +644,7 @@ export class Ligne {
   private pick(p: XY) {
     const hit = this.lineAt(p)
     if (hit) {
-      this.api.updateScene({ appState: toState(styleOf(hit.el)) })
+      this.api.updateScene({ appState: toState(lookOf(hit.el)) })
       this.takeOptions(hit.el)
     }
     this.picking = false
@@ -625,14 +655,16 @@ export class Ligne {
   private takeOptions(el: any) {
     const c = cableOf(el), d = dataOf(el)!
     this.twist = !!c
-    if (c) this.cable = { style: c.style, n: c.n, pitch: c.pitch }
+    if (c) { const { legs, folds, pick, ...rest } = c; this.cable = rest }
     this.ticks = !!d.ticks
     if (this.arrow !== !!d.arrow) { this.arrow = !!d.arrow; this.api.setActiveTool({ type: this.held() }) }
   }
 
   /** First stop: on a line's end the line is extended (in its own style, replaced on finish), on a
    *  lane it starts following that line, on a line it branches. */
-  private start(p: XY) {
+  private start(p: XY, shift = false) {
+    const t = (this.splitting || shift) && this.wireAt(p)
+    if (t) return this.splitFrom(t)
     // a free lane spot nearer than a line's end wins: stacked lines start a lane's width apart
     let hit = this.snapLine(p), ln = (!hit || hit.end) && this.lane(p)
     if (hit?.end && ln && dist(p, ln.q) < dist(p, hit.q)) hit = undefined
@@ -643,32 +675,43 @@ export class Ligne {
       const s = specOf(hit.el), rev = hit.end === 'start', o = <T>(a: T[]) => rev ? a.slice().reverse() : a
       this.pts = o(s.path); this.meta = o(s.path.map((_, i) => ({ r: s.radii[i], link: s.links?.[i] ?? null })))
       this.editing = { id: hit.el.id, reversed: rev, n: s.path.length }; this.from = s.from; this.r = s.r
-      this.api.updateScene({ appState: toState(styleOf(hit.el)) })
+      // a flat cable's folds; its end is a corner now (extended at its start: it keeps its side)
+      const f = s.cable?.folds, last = this.meta.length - 1
+      if (f) this.meta.forEach((m, i) => { m.fold = f[rev ? f.length - 1 - i : i] })
+      this.startBack = rev && !!this.meta[last].fold
+      this.meta[last].fold = false
+      this.api.updateScene({ appState: toState(lookOf(hit.el)) })
       this.takeOptions(hit.el)
       this.panelUI()
     } else if (ln) {
       this.pts = [ln.q]; this.meta = [this.onLane(ln)]
       this.track = { of: lidOf(ln.el), d: ln.d, i: ln.i }
     } else {
-      this.pts = [hit?.q ?? p]; this.meta = [{ r: this.r, link: null }]
+      this.pts = [hit?.q ?? p]; this.meta = [{ r: this.r, link: null, fold: this.flat() && this.flip }]
+      this.flip = false
       this.from = hit?.el && lidOf(hit.el)
       if (hit?.el) {
         // a branch, as on the tube map: same style as the trunk, peeling off it in a curve
         const path = pathOf(hit.el), { i, t } = beside(path, hit.q), l = dist(path[i], path[i + 1])
         const u: XY = [(path[i + 1][0] - path[i][0]) / l, (path[i + 1][1] - path[i][1]) / l]
         this.fork = { u, back: t * l, fwd: (1 - t) * l }
-        this.api.updateScene({ appState: toState(styleOf(hit.el)) })
+        this.api.updateScene({ appState: toState(lookOf(hit.el)) })
       }
     }
   }
 
   /** Next stop: on the last stop it ends the line, on the first it closes it into a zone. */
   private stop(p: XY, free: boolean) {
+    const t = this.split && this.pts.length === 2 && this.wireAt(p)
+    if (t && t.el.id === this.split!.el.id && t.end === this.split!.end) {
+      this.split!.q1 = t.q
+      return this.splitFrom()
+    }
     if (this.near(p, this.pts[this.pts.length - 1])) return this.finish()
     const closing = this.closing(p)
     this.cursor = p
     ;({ pts: this.pts, meta: this.meta } = this.route(free))
-    this.bend = false
+    this.bend = this.flip = false
     this.lead = undefined
     if (closing) return this.finish()
     this.draw()
@@ -694,18 +737,109 @@ export class Ligne {
   private radius(r: number, capture: string) {
     this.r = Math.max(0, Math.min(60, r))
     const own = (l: Link | null | undefined) => !l || l.t > 0
-    for (const m of this.meta) if (own(m.link)) m.r = this.r
-    this.applySel(s => { s.r = this.r; s.radii = s.radii.map((v, j) => own(s.links?.[j]) ? this.r : v) }, capture)
+    for (const m of this.meta) if (own(m.link) && !m.fold) m.r = this.r
+    this.applySel(s => {
+      s.r = this.r; s.radii = s.radii.map((v, j) => own(s.links?.[j]) && !s.cable?.folds?.[j] ? this.r : v)
+    }, capture)
     this.save()
     this.draw()
   }
 
-  /** Cable settings changed: for the line being drawn, else for the selected lines. */
-  private cabling(capture = 'IMMEDIATELY') {
-    this.applySel(s => { if (s.kind === 'line') s.cable = this.twist ? { ...this.cable, legs: s.cable?.legs } : undefined },
-      capture)
+  /** Cable settings changed (`patch`, else turned on / off): for the line being drawn, else for the
+   *  selected lines, which keep their legs, folds, connectors (bar those in the patch). */
+  private cabling(patch?: Partial<Cable>, capture = 'IMMEDIATELY', ui = true) {
+    if (patch) this.cable = { ...this.cable, ...patch }
+    this.applySel(s => {
+      if (s.kind !== 'line') return
+      const o = s.cable, other = patch?.n !== undefined && patch.n !== o?.n ? { pick: undefined, legs: undefined } : {}
+      s.cable = !this.twist ? undefined : o && patch ? { ...o, ...patch, ...other }
+        : { ...this.cable, legs: o?.legs, folds: o?.folds, conn: o?.conn ?? this.cable.conn }
+    }, capture)
     this.save()
+    if (ui) this.panelUI()
+  }
+
+  /** Next cable style; into flat ones with their defaults, wire counts to suit. */
+  private restyle(style: CableStyle) {
+    const was = this.cable, flat = style === 'ribbon' || style === 'ffc', fits = isFlat(was) === flat
+    const conn: Conn = style === 'ffc' ? 'none' : 'dupont'
+    this.twist = true
+    this.cabling({ style, n: fits ? was.n : style === 'ffc' ? 20 : flat ? 6 : 2,
+      ...(flat ? { awg: was.awg ?? 28, mm: was.mm ?? .5, set: was.set ?? 'mono', scale: was.scale ?? 1 } : {}),
+      ...(flat && was.style !== style ? { conn: { start: conn, end: conn } } : {}) })
+  }
+
+  /** A flat cable's end near p: the line, which end. */
+  private endAt(p: XY) {
+    const tol = 2 * SNAP / this.zoom()
+    let best: { el: any, end: 'start' | 'end' } | undefined, bd = Infinity
+    for (const l of this.lines()) {
+      const c = cableOf(l.el)
+      if (!isFlat(c)) continue
+      for (const end of ['start', 'end'] as const) {
+        const d = dist(p, endOf(l.path, c!, end).at) - cableWidth(c!, 0) / 2
+        if (d < tol && d < bd) { best = { el: l.el, end }; bd = d }
+      }
+    }
+    return best
+  }
+
+  /** C: the next connector, at the end of a flat cable under the pointer, else at both ends of what
+   *  is drawn next and of the selected lines. */
+  private connect(hover = true) {
+    const at = hover && this.cursor && !this.pts.length ? this.endAt(this.cursor) : undefined
+    const c = at ? cableOf(at.el)! : this.cable, list = CONNS[c.style === 'ffc' ? 'ffc' : 'ribbon']
+    const next = (k?: Conn) => list[(list.indexOf(k ?? 'none') + 1) % list.length]
+    if (!at) {
+      const k = next(c.conn?.end)
+      return this.cabling({ conn: { start: k, end: k } })
+    }
+    const s = specOf(at.el)
+    s.cable = { ...c, conn: { ...c.conn, [at.end]: next(c.conn?.[at.end]) } }
+    const scene = replace(this.api.getSceneElements(), lineEls(this.convert, s, styleOf(at.el), at.el))
+    this.api.updateScene({ elements: restack(this.convert, scene, at.el.id), captureUpdate: 'IMMEDIATELY' })
+  }
+
+  /** The wire of a flat cable's end at p: line, end, wire, its position across (from the left). */
+  private wireAt(p: XY) {
+    const tol = SNAP / this.zoom()
+    let best: { el: any, end: 'start' | 'end', q: number } | undefined, bd = Infinity
+    for (const l of this.lines()) {
+      const c = cableOf(l.el)
+      if (!isFlat(c)) continue
+      const home = flatTips(l.path, { ...c!, legs: undefined })
+      for (const end of ['start', 'end'] as const) home[end].forEach((at, j) => {
+        const d = dist(p, at), side = endOf(l.path, c!, end).side
+        if (d >= Math.max(tol * .6, wirePitch(c!) / 2) || d >= bd) return
+        best = { el: l.el, end, q: side > 0 ? j : c!.n - 1 - j }; bd = d
+      })
+    }
+    return best
+  }
+
+  /** Starts (or, with `t` unset, widens) a split: a bundle of the wires at positions q0..q1 of a flat
+   *  cable's end, going on from there with those wires, the same side up. */
+  private splitFrom(t?: { el: any, end: 'start' | 'end', q: number }) {
+    if (t) {
+      this.reset()
+      this.takeOptions(t.el)
+      this.split = { el: t.el, end: t.end, q0: t.q, q1: t.q }
+    }
+    const sp = this.split!, c = cableOf(sp.el)!, e = endOf(pathOf(sp.el), c, sp.end), n = c.n, P = wirePitch(c)
+    const a = Math.min(sp.q0, sp.q1), b = Math.max(sp.q0, sp.q1), k = b - a + 1
+    const across = ((a + b) / 2 - (n - 1) / 2) * P, at: XY = [e.at[0] + e.nl[0] * across, e.at[1] + e.nl[1] * across]
+    // wires in order from the bundle's left (at the start it runs the other way); back up: reversed
+    let qs = Array.from({ length: k }, (_, i) => a + i).map(q => e.side > 0 ? q : n - 1 - q)
+    if (sp.end === 'start') qs = qs.reverse()
+    if (e.side < 0) qs = qs.reverse()
+    sp.pick = qs.map(j => c.pick?.[j] ?? j)
+    this.cable = { ...this.cable, n: k }
+    const lead = Math.max(3 * P, 2 * SNAP / this.zoom())
+    this.pts = [at, [at[0] + e.out[0] * lead, at[1] + e.out[1] * lead]]
+    this.meta = [{ r: this.r, link: null, fold: e.side < 0 }, { r: this.r, link: null }]
+    this.from = lidOf(sp.el)
     this.panelUI()
+    this.draw()
   }
 
   private save() {
@@ -756,24 +890,27 @@ export class Ligne {
   private actions: Record<string, () => void> = {
     Enter: () => this.finish(), Backspace: () => this.undoStop(), Delete: () => this.undoStop(),
     b: () => this.mode === 'station' ? this.toggle('boxed') : this.mode === 'label' ? this.toggle('onLine')
-      : this.toggle('bend'),
+      : this.toggle(this.flat() ? 'flip' : 'bend'),
+    B: () => this.toggle('bend'),
     s: () => this.setMode(this.mode === 'station' ? 'line' : 'station'),
     l: () => this.setMode(this.mode === 'label' ? 'line' : 'label'),
     o: () => this.toggle('landscape'), '?': () => this.toggle('help'),
     h: () => this.toggle('help'), i: () => this.toggle('picking'), d: () => this.toggle('ticks'),
     t: () => { this.twist = !this.twist; this.cabling() },
-    T: () => {
-      this.cable = { ...this.cable, style: STYLES[(STYLES.indexOf(this.cable.style) + 1) % STYLES.length] }
-      this.twist = true
-      this.cabling()
-    },
+    T: () => this.restyle(STYLES[(STYLES.indexOf(this.cable.style) + 1) % STYLES.length]),
+    c: () => this.connect(), x: () => this.toggle('splitting'),
+    w: () => this.cabling({ set: SETS[(SETS.indexOf(this.cable.set ?? 'mono') + 1) % SETS.length] }),
+    e: () => this.cabling(this.cable.style === 'ffc'
+      ? { mm: FFC_PITCH[(FFC_PITCH.indexOf(this.cable.mm ?? .5) + 1) % FFC_PITCH.length] }
+      : { awg: GAUGES[(GAUGES.indexOf(this.cable.awg ?? 28) + 1) % GAUGES.length] }),
     a: () => { this.toggle('arrow'); this.api.setActiveTool({ type: this.held() }) },
     n: () => this.toggle('snap'),
     '[': () => { this.radius(this.r - 4, 'IMMEDIATELY'); this.panelUI() },
     ']': () => { this.radius(this.r + 4, 'IMMEDIATELY'); this.panelUI() },
     g: () => this.copy(), k: () => this.legend(), p: () => this.paper('A5'), P: () => this.paper('A6'),
   }
-  private toggle(k: 'boxed' | 'landscape' | 'help' | 'picking' | 'ticks' | 'arrow' | 'free' | 'snap' | 'bend' | 'onLine') {
+  private toggle(k: 'boxed' | 'landscape' | 'help' | 'picking' | 'ticks' | 'arrow' | 'free' | 'snap' | 'bend' | 'onLine'
+    | 'flip' | 'splitting') {
     this[k] = !this[k]
     if (k === 'ticks') this.applySel(s => { s.ticks = this.ticks }, 'IMMEDIATELY')
     if (k === 'onLine') this.save()
@@ -783,8 +920,8 @@ export class Ligne {
   private setMode(m: Mode) { this.reset(); this.mode = m; this.panelUI() }
   private reset() {
     this.pts = []; this.meta = []
-    this.from = this.editing = this.fork = this.lead = this.track = undefined
-    this.bend = false
+    this.from = this.editing = this.fork = this.lead = this.track = this.split = undefined
+    this.bend = this.flip = this.startBack = false
     this.draw()
   }
 
@@ -850,7 +987,7 @@ export class Ligne {
   /** Commits the drawn stops: a line, or a zone at the back when it ends on its first stop. A line
    *  on lanes of others joins their stack; lines on its own lanes are rebuilt to follow it. */
   private finish() {
-    const keep = kept(this.pts)
+    const keep = kept(this.pts, i => !!this.meta[i].fold)
     let pts = keep.map(i => this.pts[i]), meta = keep.map(i => this.meta[i])
     const closed = pts.length > 3 && same(pts[0], pts[pts.length - 1])
     if (pts.length < 2 || same(pts[0], pts[pts.length - 1]) && !closed) return this.reset()
@@ -860,6 +997,11 @@ export class Ligne {
       && nearest(l.drawn, pts.at(-1)!).d < l.width / 2 + 1) : undefined
     // extended at its start: back to its own direction, so lines on its lanes keep their legs
     if (ed?.reversed) { pts = pts.reverse(); meta = meta.reverse() }
+    if (ed?.reversed && isFlat(this.cable)) {
+      // the part drawn before keeps the side it showed: the new start turns over if needed
+      const J = Math.max(0, pts.length - ed.n), back = meta.slice(0, J + 1).filter(m => m.fold).length % 2 === 1
+      if (back !== this.startBack) meta[0] = { ...meta[0], fold: !meta[0].fold }
+    }
     let scene = this.api.getSceneElements().slice()
     const d = base ? specOf(base) : undefined
     const of = new Set(meta.map(m => m.link?.of).filter(Boolean) as string[])
@@ -873,16 +1015,30 @@ export class Ligne {
     }
     const spec: Spec = { kind: closed ? 'zone' : 'line', lid: d?.lid, path: pts, radii: meta.map(m => m.r),
       links: meta.map(m => m.link), r: this.r, from: this.from, to: endHit ? lidOf(endHit.el) : d?.to, stack,
-      cable: this.twist ? { ...this.cable, legs: d?.cable?.legs } : undefined, ticks: this.ticks, arrow: this.arrow,
-      own: d?.own }
+      cable: this.twist ? this.made(meta, d?.cable) : undefined, ticks: this.ticks, arrow: this.arrow, own: d?.own }
     const els = lineEls(this.convert, spec, fromState(this.api.getAppState()), base)
     if (base) {
       const shift = ed.reversed ? pts.length - ed.n : 0
       if (shift) scene = scene.map(e => this.shiftLinks(e, lidOf(base), shift))
       scene = restack(this.convert, replace(scene, els), base.id)
     } else scene = closed ? [...els, ...scene] : [...scene, ...els]
+    const sp = this.split, parent = sp && scene.find(e => e.id === sp.el.id), pc = parent && cableOf(parent)
+    if (sp && pc?.conn?.[sp.end] && pc.conn[sp.end] !== 'none') {
+      // a split end has no connector of its own
+      const s = specOf(parent)
+      s.cable = { ...pc, conn: { ...pc.conn, [sp.end]: 'none' } }
+      scene = replace(scene, lineEls(this.convert, s, styleOf(parent), parent))
+    }
     this.api.updateScene({ elements: scene, captureUpdate: 'IMMEDIATELY' })
     this.reset()
+  }
+
+  /** The cable of a line being finished: ligne's settings; an extended line keeps its legs and
+   *  connectors, a split its wires; folds from the stops. */
+  private made(meta: Meta[], had?: Cable): Cable {
+    const folds = isFlat(this.cable) && meta.some(m => m.fold) ? meta.map(m => !!m.fold) : undefined
+    const sp = this.split, conn = sp ? { start: 'none' as const, end: this.cable.conn?.end } : this.cable.conn
+    return { ...this.cable, legs: had?.legs, conn: had?.conn ?? conn, pick: had?.pick ?? sp?.pick, folds }
   }
 
   /** e with stack group g (outermost) when it has none yet. */
@@ -944,15 +1100,27 @@ export class Ligne {
     const mode = this.mode, A = this.actions
     const radius = this.range('Bend radius (0: sharp): the line being drawn, else the selected lines [ [ ] ]',
       0, 60, this.r, (v, c) => this.radius(v, c))
-    const pitch = this.range('Twist / check length', 4, 80, this.cable.pitch, (v, c) => {
-      this.cable = { ...this.cable, pitch: v }; this.applySel(s => { if (s.cable) s.cable = { ...s.cable, pitch: v } }, c)
-      this.save()
-    })
-    const cableItems: Item[] = this.twist ? [
-      { icon: this.cable.style, title: `Cable: ${this.cable.style} (round, zigzag, checks)`, key: '⇧T', click: A.T },
-      { icon: 'strands', title: 'Strands', text: '×' + this.cable.n,
-        click: () => { this.cable = { ...this.cable, n: this.cable.n >= 4 ? 2 : this.cable.n + 1 }; this.cabling() } }, pitch,
-    ] : []
+    const pitch = this.range('Twist / check length', 4, 80, this.cable.pitch, (v, c) => this.cabling({ pitch: v }, c, false))
+    const c = this.cable, ffc = c.style === 'ffc', conn = c.conn?.end ?? 'none'
+    const flatItems: Item[] = [
+      this.range('Wires', 1, 40, c.n, (v, cap) => this.cabling({ n: v }, cap, false)),
+      ffc ? { icon: 'gauge', title: 'FFC pitch, mm', key: 'E', text: String(c.mm ?? .5), click: A.e }
+        : { icon: 'gauge', title: 'Wire gauge, AWG (silicone)', key: 'E', text: String(c.awg ?? 28), click: A.e },
+      ...(ffc ? [] : [{ icon: 'set', title: 'Wire colours: mono (white stripe on wire 1), Qwiic, Grove, rainbow', key: 'W',
+        text: c.set ?? 'mono', click: A.w }]),
+      { icon: 'scale', title: 'Drawn at true size ×', text: '×' + (c.scale ?? 1),
+        click: () => this.cabling({ scale: c.scale === 4 ? 1 : (c.scale ?? 1) * 2 }) },
+      { icon: 'fold', title: 'Fold at the next corner: the cable turns over', key: 'B', on: this.flip, click: A.b },
+      { icon: 'conn', title: 'Connector at the ends (C with the pointer over a cable end: that end)', key: 'C', text: conn,
+        click: () => this.connect(false) },
+      { icon: 'split', title: 'Split: click a wire at a cable end, again for the last (or Shift-click)', key: 'X',
+        on: this.splitting, click: A.x },
+    ]
+    const cableItems: Item[] = !this.twist ? [] : [
+      { icon: c.style, title: `Cable: ${c.style} (round, zigzag, checks, ribbon, ffc)`, key: '⇧T', click: A.T },
+      ...isFlat(c) ? flatItems : [{ icon: 'strands', title: 'Strands', text: '×' + c.n,
+        click: () => this.cabling({ n: c.n >= 4 ? 2 : c.n + 1 }) }, pitch],
+    ]
     const items: Item[] = [
       { icon: 'line', title: 'Lines', key: 'S', on: mode === 'line', click: () => this.setMode('line') },
       { icon: 'station', title: 'Stations', key: 'S', on: mode === 'station', click: () => this.setMode('station') },
@@ -962,7 +1130,8 @@ export class Ligne {
         { icon: 'free', title: 'Free legs, 8 directions (or hold Shift)', key: '⇧', on: this.free,
           click: () => this.toggle('free') },
         { icon: 'magnet', title: 'Snap to lines and lanes (hold Ctrl/Cmd: off)', key: 'N', on: this.snap, click: A.n },
-        { icon: 'bend', title: 'Bend the other way (the other leg first)', key: 'B', on: this.bend, click: A.b }, radius,
+        { icon: 'bend', title: 'Bend the other way (the other leg first)', key: this.flat() ? '⇧B' : 'B', on: this.bend,
+          click: A.B }, radius,
         { icon: 'arrow', title: 'Arrowheads (Excalidraw\'s arrow style)', key: 'A', on: this.arrow, click: A.a },
         { icon: 'ticks', title: 'Direction chevrons, the way the line was drawn', key: 'D', on: this.ticks, click: A.d },
         { icon: 'twist', title: 'Cable (2nd colour: Excalidraw\'s background)', key: 'T', on: this.twist, click: A.t },

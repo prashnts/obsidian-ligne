@@ -25,6 +25,14 @@ const ICONS: Record<string, string> = {
   free: '<path d="M3 17L17 3M3 17h6M3 17v-6"/>',
   arrow: '<path d="M3 15l5-5h8M13 7l3 3-3 3"/>',
   ticks: '<path d="M2 14h16M5 8h4M7 6l2 2-2 2M12 8h4M14 6l2 2-2 2"/>',
+  ribbon: '<path d="M2 6h16M2 9h16M2 12h16M2 15h16"/>',
+  ffc: '<rect x="2" y="5" width="16" height="10" rx="1"/><path d="M5 8v4M8 8v4M11 8v4M14 8v4"/>',
+  gauge: '<circle cx="10" cy="10" r="2.5"/><circle cx="10" cy="10" r="7"/>',
+  set: '<path d="M4 4v12M8 4v12M12 4v12M16 4v12"/>',
+  scale: '<path d="M3 17L17 3M11 3h6v6M3 11v6h6"/>',
+  fold: '<path d="M2 6h9l6 6v6M11 6v6h6"/>',
+  conn: '<rect x="9" y="4" width="8" height="12" rx="1"/><path d="M2 8h7M2 12h7M12 8h2M12 12h2"/>',
+  split: '<path d="M2 10h7l7-5M9 10l7 5"/>',
   twist: '<path d="M2 7c4 0 4 6 8 6s4-6 8-6M2 13c4 0 4-6 8-6s4 6 8 6"/>',
   finish: '<path d="M4 10l4 4 8-8"/>',
   undo: '<path d="M8 5L3 10l5 5M3 10h9a5 5 0 0 1 0 10"/>',
@@ -61,6 +69,7 @@ export class Panel {
     const at = bar ?? this.host
     if (this.box.parentElement !== at) at.append(this.box)
     this.box.classList.toggle('loose', !bar)
+    this.box.style.maxWidth = `${this.host.clientWidth - 32}px`     // wraps in a narrow pane
   }
 
   destroy() { this.tool.remove(); this.box.remove() }

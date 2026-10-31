@@ -1,25 +1,34 @@
 // Cables: n strands of width w along a line, twisted (round or zigzag) or side by side with colour
-// checks. Each end may fan out into legs, one per strand, each to its own point. Output is plain
-// pieces (polylines and filled polygons) in two colours, for any host to draw.
+// checks; ribbons and FFC (flat.ts). Each end may fan out into legs, one per strand, each to its
+// own point. Output is plain pieces (polylines and filled polygons), for any host to draw.
+import { flatWidth, isFlat, type Conn, type WireSet } from './flat.ts'
 import { dist, lengths, normals, octi, pointAt, resample, round, type XY } from './geom.ts'
 
-export type CableStyle = 'round' | 'zigzag' | 'checks'
-export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks']
+export type CableStyle = 'round' | 'zigzag' | 'checks' | 'ribbon' | 'ffc'
+export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc']
 
 /** Per end, per strand: where its leg goes, relative to that end of the line (null: straight on). */
 export interface Legs { start?: (XY | null)[], end?: (XY | null)[] }
-/** `pitch`: length of one full twist, or of two checks. */
-export interface Cable { style: CableStyle, n: number, pitch: number, legs?: Legs }
+/** `pitch`: length of one full twist, or of two checks. Flat cables (ribbon, ffc): `awg` (ribbon)
+ *  or `mm` (FFC pitch), true size × `scale`; ribbon colours `set`, of which a split takes the wires
+ *  `pick`; `folds` per waypoint (the first: starts back up); a connector at each end. */
+export interface Cable {
+  style: CableStyle, n: number, pitch: number, legs?: Legs,
+  awg?: number, mm?: number, scale?: number, set?: WireSet, pick?: number[], folds?: boolean[],
+  conn?: { start?: Conn, end?: Conn },
+}
 
-/** A polyline stroked w wide, or with `fill` a polygon; colour 0 is the line's, 1 the second one. */
-export interface Piece { pts: XY[], color: 0 | 1, fill?: boolean }
+/** A polyline stroked w wide (or `width`), or with `fill` a polygon outlined in `stroke`; colour 0
+ *  is the line's, 1 the second one, else as given. */
+export interface Piece { pts: XY[], color: 0 | 1 | string, fill?: boolean, width?: number, stroke?: string, dash?: boolean }
 
 /** Strand offsets, side by side and touching. */
 export const offsets = (n: number, w: number) => Array.from({ length: n }, (_, j) => (j - (n - 1) / 2) * w)
 const amp = (n: number, w: number) => (n - 1) * w / 2 + w / 4
 
 /** Overall width of the cable body. */
-export const cableWidth = (c: Cable, w: number) => c.style === 'checks' ? c.n * w : 2 * amp(c.n, w) + w
+export const cableWidth = (c: Cable, w: number) =>
+  isFlat(c) ? flatWidth(c) : c.style === 'checks' ? c.n * w : 2 * amp(c.n, w) + w
 
 const wave = (x: number, zig: boolean) => zig ? 2 / Math.PI * Math.asin(Math.sin(x)) : Math.sin(x)
 const smooth = (x: number) => { const t = Math.max(0, Math.min(1, x)); return t * t * (3 - 2 * t) }

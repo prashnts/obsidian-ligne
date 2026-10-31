@@ -25,6 +25,14 @@ line under the pointer, in ligne or not. Hold Ctrl/Cmd (or `n`) to place anywher
 Cables (`t`, style `T`: round / zigzag twist or colour checks; strands ×2–4, length slider): strands
 in the stroke colour and Excalidraw's background colour (white checks when none); stacked cables
 keep a gap. Near a cable, drag a strand's end dot to bend its leg out to a pin; drop it back to reset.
+Flat cables (`⇧T` on to *ribbon* / *ffc*) are drawn true to size at 96 dpi (× 1/2/4), so folds show
+as they will be: silicone ribbon by AWG (32/30/28/26, `e`; black with a white stripe on wire 1 in the
+stroke colour, or Qwiic, Grove, rainbow colours, `w`), FFC by pitch (0.5/1 mm). `b` folds at the next
+corner (at the first stop: starts back up): the cable turns over, the back shows (mirrored wires,
+lighter, dashed stripe, an FFC's stiffener instead of its contacts); `⇧B` swaps the bend. `c` cycles
+the connector at both ends (Dupont by default, JST PH, SH, MX 1.25, none; FFC: ZIF), or at the end
+under the pointer; fanned-out wires get one housing each. `x` (or Shift-click) on a wire at a cable
+end splits: click the last wire of the bundle too, then draw it on; it keeps its wires and side.
 `d` direction chevrons along the line, the way it was drawn. `a` arrowheads.
 `s` stations (`1-4` stop/interchange/commit/net flag, `b` boxed label), following their line's colour.
 `l` labels: click a line, type; set along it, on it (knocked out) or beside it (`b`); drag along the line.
@@ -54,5 +62,5 @@ Commands: *Toggle the line tool*, *Copy the graph as text*.
     node tools/cdp.mjs shot ~/limn-shot/ligne/obsidian.png
     npm run release   # release/ligne.zip → <vault>/.obsidian/plugins/ligne/
 
-Release: `npm version 0.2.0 && git push --follow-tags` (tag = manifest version, no `v`); the
-release workflow tests, builds and attaches main.js, manifest.json, styles.css and ligne.zip.
+Release: `npm version 0.4.3`, tag `v0.4.3`, `git push --follow-tags` (tag = manifest version, `v`
+optional); the release workflow tests, builds and attaches main.js, manifest.json, styles.css and ligne.zip.

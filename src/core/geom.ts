@@ -53,13 +53,14 @@ export function upright(u: XY): number {
 export const lastDir = (pts: XY[]): XY | undefined =>
   pts.length < 2 ? undefined : unit(sub(pts[pts.length - 1], pts[pts.length - 2]))
 
-/** Indices of the points kept when dropping repeated points and joining collinear legs. */
-export function kept(pts: XY[]): number[] {
+/** Indices of the points kept when dropping repeated points and joining collinear legs; pinned
+ *  points stay even between collinear legs. */
+export function kept(pts: XY[], pinned: (i: number) => boolean = () => false): number[] {
   const out: number[] = []
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i], at = (k: number) => pts[out[out.length - k]]
     if (out.length && same(at(1), p)) continue
-    if (out.length >= 2) {
+    if (out.length >= 2 && !pinned(out[out.length - 1])) {
       const u = unit(sub(at(1), at(2))), v = unit(sub(p, at(1)))
       if (Math.abs(u[0] * v[1] - u[1] * v[0]) < EPS && u[0] * v[0] + u[1] * v[1] > 0) out.pop()
     }

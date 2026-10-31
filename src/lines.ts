@@ -2,7 +2,8 @@
 // extras drawn with it in its own group (cable strands and checks, direction chevrons). Lines that
 // follow a lane of another line are rebuilt when that line changes (restack). Lines are found by
 // lid and groups, never by element id alone: Excalidraw re-ids elements on paste and duplicate.
-import { cable, cableWidth, chevrons, type Cable } from './core/cable.ts'
+import { cable, cableWidth, chevrons, type Cable, type Piece } from './core/cable.ts'
+import { flat, isFlat } from './core/flat.ts'
 import { carry, concentric, dist, offsetAt, round, type XY } from './core/geom.ts'
 import type { LineData } from './core/graph.ts'
 import type { Body } from './core/snap.ts'
@@ -77,7 +78,9 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   // a zone starts mid first leg so that its first corner is rounded too
   const mid: XY = [(path[0][0] + path[1][0]) / 2, (path[0][1] + path[1][1]) / 2]
   const drawn = kind === 'zone' ? round([mid, ...path.slice(1), mid], [0, ...radii.slice(1), 0]) : round(path, radii)
-  const pieces = c ? cable(drawn, c, w).pieces : [{ pts: drawn, color: 0 as const }]
+  // a flat cable's colours are its own: the main element is its first band, outlined in the line colour
+  const fl = isFlat(c), pieces: Piece[] = !c ? [{ pts: drawn, color: 0 }]
+    : fl ? flat(path, radii, c, st.strokeColor, '#ffffff') : cable(drawn, c, w).pieces
   const own = pieces.length > 1 || spec.ticks ? spec.own ?? groupId() : undefined
   const groupIds = [...(own ? [own] : []),
     ...(base?.groupIds ?? []).filter((g: string) => g !== spec.own && g !== spec.stack),
@@ -92,6 +95,8 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   const [made] = convert([{ type: arrow ? 'arrow' : 'line', ...at, ...st,
     roundness: null, startArrowhead: arrow ? st.startArrowhead : null, endArrowhead: arrow ? st.endArrowhead ?? 'arrow' : null,
     ...(tint ? { backgroundColor: st.strokeColor + '33', fillStyle: 'solid' } : {}),
+    ...(fl ? { backgroundColor: pieces[0].color, fillStyle: 'solid', strokeWidth: pieces[0].width, strokeStyle: 'solid',
+      roughness: 0 } : {}),
     groupIds, customData: { ligne: data } }])
   const main = base ? { ...made, id: base.id, version: base.version + 1 } : made
   const extra = (pts: XY[], skel: object, kind: string) => ({ type: 'line', ...placed(pts), roughness: st.roughness, ...skel,
@@ -99,10 +104,12 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
     customData: { ligne: { kind, of: main.id } } })
   const extras: any[] = []
   if (c) for (const p of pieces.slice(1)) {
-    const color = p.color ? second(st, c) : st.strokeColor
+    const color = typeof p.color === 'string' ? p.color : p.color ? second(st, c) : st.strokeColor
     extras.push(extra(p.pts, p.fill
-      ? { strokeColor: 'transparent', backgroundColor: color, fillStyle: 'solid', strokeWidth: 1, roughness: 0 }
-      : { strokeColor: color, strokeWidth: w, strokeStyle: st.strokeStyle }, 'strand'))
+      ? { strokeColor: p.stroke ?? 'transparent', backgroundColor: color, fillStyle: 'solid', strokeWidth: p.width ?? 1,
+        roughness: 0 }
+      : { strokeColor: color, strokeWidth: p.width ?? w, strokeStyle: p.dash ? 'dashed' : fl ? 'solid' : st.strokeStyle,
+        ...(fl ? { roughness: 0 } : {}) }, 'strand'))
   }
   if (spec.ticks) {
     // chevrons on the line, pointing the way it was drawn: light on thick lines, in its colour on thin ones
