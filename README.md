@@ -1,8 +1,10 @@
 # ligne
 
 Metro-map lines over Excalidraw: octilinear legs with round bends, trunk/branch/dotted lines,
-branching, extending, stations (label lines `key: value` = data) and a text graph export. Web page now, Obsidian plugin (on top of the
-Excalidraw plugin) next. `src/core/` is dependency-free geometry + graph, reusable elsewhere.
+branching, extending, stations (label lines `key: value` = data) and a text graph export; cables,
+ribbons, jackets and coax true to size with their connectors, harness joints, flowchart blocks and
+nomnoml import. A web page and an Obsidian plugin (on top of the Excalidraw plugin). `src/core/` is
+dependency-free geometry + graph, reusable elsewhere.
 
     npm run dev       # web page on :4240, rebuilds on change
     npm test          # core + line tests (node:test, no browser)

@@ -22,8 +22,8 @@ DEMO = [
     ['move', 331, 258], ['click', 330, 258], ['move', 500, 258], ['move', 690, 360],
     ['click', 900, 358], ['click', 900, 358],                                # on its lane
     ['key', 's'], ['click', 400, 250], ['key', '2'], ['click', 700, 350], ['key', '3'], ['click', 1000, 350],
-    ['key', 'l'], ['click', 820, 350], ['wait', 100], ['eval', "document.querySelector('.ligne-input').value = 'trunk'"],
-    ['key', 'Enter'], ['key', 's'], ['move', 600, 600],
+    ['key', 't'], ['click', 820, 350], ['wait', 100], ['eval', "document.querySelector('.ligne-input').value = 'trunk'"],
+    ['key', 'Enter'], ['key', 'l'], ['move', 600, 600],
 ]
 
 
