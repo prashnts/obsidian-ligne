@@ -27,6 +27,7 @@
 .ligne-guide { stroke-dasharray: 3 4; opacity: .5; }
 .ligne-snap.lane { fill: #fff; stroke: #e8590c; }
 .ligne-live { opacity: .85; }
+.ligne-short { stroke-dasharray: 4 3; }
 .ligne-stop { fill: #fff; stroke: #1971c2; stroke-width: 1.5; }
 .ligne-stop.fold { fill: #e8590c; stroke: #fff; }
 .ligne-hover { opacity: .18; }

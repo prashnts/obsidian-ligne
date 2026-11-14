@@ -22,7 +22,8 @@ import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, endOf, flatTips, isFlat, sw
   type Conn } from './core/flat.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
-import { dropBend, jog, legNormal, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
+import { dropBend, jog, legNormal, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
+import { needs } from './core/lead.ts'
 import { graph, toText, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { laneAt, type Track } from './core/snap.ts'
@@ -509,6 +510,17 @@ export class Ligne {
   /** Whether a flat cable (ribbon, FFC) is being drawn. */
   private flat() { return this.twist && isFlat(this.cable) }
 
+  /** Stops moved so that a cable's fittings get a straight run at the drawn start (and, `end`, at
+   *  the end): the bend next to a short end leg slides back along it. Bends on lanes or folds stay. */
+  private room(pts: XY[], meta: Meta[], end: boolean): { pts: XY[], short: [number, number] } {
+    const c = this.twist ? this.cable : undefined
+    if (!c?.conn || pts.length < 3) return { pts, short: [0, 0] }
+    // drawn from a line's start (extending it there): its ends swap
+    const rev = this.editing?.reversed, cc = rev ? { ...c, conn: { start: c.conn.end, end: c.conn.start } } : c
+    const [n0, n1] = needs(pts, meta.map(m => m.r), cc)
+    return roomy(pts, n0, end ? n1 : 0, i => !!meta[i]?.link || !!meta[i]?.fold)
+  }
+
   /** Whether the leg from `last` to `to` starts with its 45° leg: the way the pointer left the
    *  stop; else off a lane at 45° to it (it peels off), onto one with the 45° leg last (it curves
    *  on), or the order turning least. B swaps. */
@@ -591,8 +603,12 @@ export class Ligne {
     if (!this.press?.dragging) this.guides = []
     if (this.mode === 'line') {
       // the line as it will be: rounded, cable wide, the leg to the pointer included
-      const r = this.route(free)
-      kids.push(path(round(r.pts, r.meta.map(m => m.r)), 'ligne-live', this.width() * z))
+      const r = this.route(free), rm = this.room(r.pts, r.meta, true)
+      kids.push(path(round(rm.pts, r.meta.map(m => m.r)), 'ligne-live', this.width() * z))
+      // an end leg still too short for its connector
+      for (const [k, a, b] of [[0, 0, 1], [1, rm.pts.length - 1, rm.pts.length - 2]] as const)
+        if (rm.short[k] > 0.5) kids.push(path([rm.pts[a], rm.pts[b]], 'ligne-short', 2, '#e03131'))
+      r.pts = rm.pts
       // bends that line up with what is drawn
       if (n) for (let i = n; i < r.pts.length - 1; i++)
         this.guides.push(...aligned(r.pts[i], this.refs(), 0.75 / z, this.gridDirs(), NEAR / z))
@@ -1061,6 +1077,7 @@ export class Ligne {
     const closing = this.closing(p)
     this.cursor = p
     ;({ pts: this.pts, meta: this.meta } = this.route(free))
+    this.pts = this.room(this.pts, this.meta, false).pts
     this.bend = this.flip = false
     this.lead = undefined
     if (closing) return this.finish()
@@ -1518,6 +1535,7 @@ export class Ligne {
   /** Commits the drawn stops: a line, or a zone at the back when it ends on its first stop. A line
    *  on lanes of others joins their stack; lines on its own lanes are rebuilt to follow it. */
   private finish() {
+    this.pts = this.room(this.pts, this.meta, true).pts
     const keep = kept(this.pts, i => !!this.meta[i].fold)
     let pts = keep.map(i => this.pts[i]), meta = keep.map(i => this.meta[i])
     const closed = pts.length > 3 && same(pts[0], pts[pts.length - 1])

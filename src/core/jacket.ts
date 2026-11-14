@@ -41,7 +41,7 @@ function box(at: XY, u: XY, d: number, w: number, fill: string, stroke: string, 
 }
 
 /** How long an end's fitting is along the cable, px. */
-function fitting(c: Cable, end: End): number {
+export function fitting(c: Cable, end: End): number {
   const k = px(c), conn = c.conn?.[end] ?? 'none', D = jacketWidth(c)
   if (conn === 'none') return 0
   const braid = c.shield ? BRAID * k : 0

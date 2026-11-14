@@ -49,7 +49,8 @@ silicone ribbon by AWG (32/30/28/26, `e`; black with a white stripe on wire 1 in
 Qwiic, Grove, rainbow colours in the popover), FFC by pitch (0.5/1 mm). `b` folds at the next corner (at
 the first stop: starts back up): the cable turns over, the back shows; `⇧B` swaps the bend. `c` cycles
 the connector at both ends (none, Dupont, JST PH, SH, MX 1.25; FFC: ZIF), or at the end under the
-pointer. At a flat cable's end, click a wire: a bundle of it goes on (click another wire: up to it; all
+pointer. A cable with connectors keeps a straight run for them: the bend next to a short end leg slides
+back (shown as you draw; still too short: dashed red). At a flat cable's end, click a wire: a bundle of it goes on (click another wire: up to it; all
 of them, or ⇧-click: the cable itself). Drag a wire to fan it out; click a fanned wire: a plain line
 goes on from it. Click a cable's body to branch off it. By the pointer, a hint says what a click does.
 Text along a line, repeated (knocked out of thin lines, inside thick ones): label tool *along* (`⇧T`). `d` direction

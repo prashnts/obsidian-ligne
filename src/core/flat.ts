@@ -126,6 +126,17 @@ function cut(pts: XY[], a: number, b: number): XY[] {
   return [at(a), ...pts.filter((_, i) => s[i] > a && s[i] < b), at(b)]
 }
 
+/** How long an end's fitting runs along a flat cable, px: wires closing up to a housing and the
+ *  housing (not when fanned out), or an FFC's stiffener and ZIF. */
+export function flatFitting(c: Cable, end: End): number {
+  const k = px(c), conn = c.conn?.[end] ?? 'none'
+  if (c.style === 'ffc') return 4 * k + (conn === 'zif' ? HOUSING.zif.depth * k : 0)
+  if (!isHousing(conn) || c.legs?.[end]?.some(Boolean)) return 0
+  const h = HOUSING[conn as 'dupont'], cp = h.pitch * k, os = offsets(c.n, wirePitch(c))
+  const d = Math.max(...os.map((o, j) => Math.abs(o - (j - (c.n - 1) / 2) * cp)))
+  return Math.max(1.5 * k, 1.5 * d) + h.depth * k
+}
+
 /** The flat cable over waypoints `path` (bend radii `radii`). `base`: the mono wire colour, `light`
  *  the stripe's. Pieces in drawing order, the first a band (the cable's outline). */
 export function flat(path: XY[], radii: readonly number[], c: Cable, base: string, light: string): Piece[] {
