@@ -95,6 +95,8 @@ export function kept(pts: XY[], pinned: (i: number) => boolean = () => false): n
 /** Drops repeated points and joins collinear legs. */
 export const simplify = (pts: XY[]): XY[] => kept(pts).map(i => pts[i])
 
+const ARC = 0.15                                    // px: how far an arc's chords may stray from it
+
 /** Polyline with every bend replaced by an arc of radius ≤ r (one for all, or per point), sampled
  *  every ≤ `step` radians. The radius shrinks where legs are too short to hold it (two bends share
  *  a leg half and half). */
@@ -112,7 +114,9 @@ export function round(pts: XY[], radius: number | readonly number[], step = Math
     const rr = t / Math.tan(th / 2), sg = Math.sign(cross)
     const s: XY = [v[0] - u1[0] * t, v[1] - u1[1] * t]
     const c: XY = [s[0] - sg * u1[1] * rr, s[1] + sg * u1[0] * rr]
-    const a0 = Math.atan2(s[1] - c[1], s[0] - c[0]), k = Math.max(1, Math.ceil(th / step))
+    // finer on big radii: the chord never strays more than ARC px off the circle
+    const fine = Math.min(step, 2 * Math.acos(Math.max(-1, 1 - ARC / Math.max(rr, ARC))))
+    const a0 = Math.atan2(s[1] - c[1], s[0] - c[0]), k = Math.max(1, Math.ceil(th / fine))
     for (let j = 0; j <= k; j++) {
       const a = a0 + sg * th * j / k
       out.push([c[0] + rr * Math.cos(a), c[1] + rr * Math.sin(a)])
