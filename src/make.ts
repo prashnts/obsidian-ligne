@@ -46,8 +46,9 @@ export const DOT: Record<Exclude<Shape, 'net'>, { d: number, w: number, fill: bo
 /** A station at `at` on `line`, grouped with its label: plain or boxed text beside a dot, or a net
  *  flag (KiCad global label) starting at `at` and pointing to `dir` (+1 right, -1 left). */
 export function station(convert: Convert, o: { at: XY, shape: Shape, color: string, text: string,
-  font: Font, line?: string, boxed?: boolean, dir?: 1 | -1, angle?: number, away?: XY, off?: number }): any[] {
-  const g = groupId(), data: StationData = { kind: 'station', line: o.line, shape: o.shape }
+  font: Font, line?: string, boxed?: boolean, dir?: 1 | -1, angle?: number, away?: XY, off?: number,
+  span?: [XY, XY], thick?: number }): any[] {
+  const g = groupId(), data: StationData = { kind: 'station', line: o.line, shape: o.shape, ...(o.span ? { span: true } : {}) }
   const [x, y] = o.at, tag = { groupIds: [g], customData: { ligne: data } }
   if (o.shape === 'net') {
     const [t] = make(convert, [{ type: 'text', x: 0, y: 0, text: o.text, ...ink(o.font) }])
@@ -57,6 +58,17 @@ export function station(convert: Convert, o: { at: XY, shape: Shape, color: stri
       strokeColor: o.color, backgroundColor: '#ffffff', fillStyle: 'solid', strokeWidth: 2, roughness: 0,
       roundness: null, ...tag }])
     return [...flag, { ...t, x: dir > 0 ? x + 6 : x - 6 - t.width, y: y - t.height / 2, groupIds: [g] }]
+  }
+  if (o.span) {
+    // an interchange across a stack (or between stacks): a white capsule with a dark outline
+    const [a, b] = o.span, T = o.thick ?? 16, pts = capsule(a, b, T / 2)
+    const [m] = make(convert, [{ type: 'line', x: pts[0][0], y: pts[0][1], points: pts.map(p => [p[0] - pts[0][0], p[1] - pts[0][1]]),
+      strokeColor: '#1e1e1e', backgroundColor: '#ffffff', fillStyle: 'solid', strokeWidth: Math.max(2, T / 6), roughness: 0,
+      roundness: null, ...tag }])
+    const lab = o.away ? label(convert, { type: o.boxed ? 'round' : 'text', at: o.at, angle: o.angle ?? 0, text: o.text,
+      font: o.font, color: o.boxed ? o.color : '#1e1e1e', paper: '#ffffff', line: '-', on: false, off: (o.off ?? 0) + 2,
+      away: o.away }) : []
+    return [{ ...m, groupIds: [g] }, ...lab.map(e => ({ ...e, groupIds: [g], customData: undefined }))]
   }
   const dot = DOT[o.shape], r = dot.d / 2
   const mark = { type: 'ellipse', x: x - r, y: y - r, width: dot.d, height: dot.d, strokeColor: o.color,
@@ -76,6 +88,14 @@ export function station(convert: Convert, o: { at: XY, shape: Shape, color: stri
     : { type: 'text', x: x + dot.d, y: y - dot.d - o.font.fontSize * 1.25, text: o.text, ...ink(o.font), groupIds: [g] }
   const els = make(convert, [mark, text])
   return els.map(e => ({ ...e, groupIds: [g] }))         // bound text too
+}
+
+/** A capsule round the segment a – b, r its radius: a closed outline. */
+export function capsule(a: XY, b: XY, r: number): XY[] {
+  const d = Math.hypot(b[0] - a[0], b[1] - a[1]), ang = d > 1e-9 ? Math.atan2(b[1] - a[1], b[0] - a[0]) : 0, pts: XY[] = []
+  for (const [c, a0] of [[b, ang - Math.PI / 2], [a, ang + Math.PI / 2]] as const)
+    for (let i = 0; i <= 10; i++) { const t = a0 + Math.PI * i / 10; pts.push([c[0] + Math.cos(t) * r, c[1] + Math.sin(t) * r]) }
+  return [...pts, pts[0]]
 }
 
 /** Label types: plain text (on a line: knocked out), a box, a rounded box, KiCad's net label

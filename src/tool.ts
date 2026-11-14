@@ -27,7 +27,7 @@ import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, oc
 import { dropBend, jog, legNormal, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
 import { needs } from './core/lead.ts'
 import { METRO, SIGNALS, SIGNAL_NAMES, netColor, ownColors } from './core/palette.ts'
-import { graph, toText, type Cap, type Link, type Shape } from './core/graph.ts'
+import { graph, middle, toText, type Cap, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { clear, edgeOut, type Box } from './core/place.ts'
 import { laneAt, type Track } from './core/snap.ts'
@@ -35,7 +35,7 @@ import { PARTS, PART_NAMES, clicks, board, holeAt, part, pinsAt, pinsOf, pitchOf
   type PartKind } from './board.ts'
 import { EXTRAS, bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, layered, lidOf, lineEls, pathOf, radiiOf, relink, replace,
   onLanes, resized, restack, specOf, stale, type Spec } from './lines.ts'
-import { DOT, FONTS, LABELS, PAPER, SIZES, bump, fromState, groupId, label, legend, paper, station, styleOf, toState,
+import { DOT, FONTS, LABELS, PAPER, SIZES, bump, capsule, fromState, groupId, label, legend, paper, station, styleOf, toState,
   turned, type Convert, type Font, type LabelDir, type LabelType, type Style } from './make.ts'
 import { Panel, type Btn, type Item, type Menu } from './ui.ts'
 
@@ -109,6 +109,7 @@ const HELP: [string, string][] = [
   ['ends popover', 'each end: bar, open dot, disc · casing: paper-coloured band under the line, gaps at crossings'],
   ['style', "Excalidraw's panel: colour, width, dash, arrowheads"],
   ['S · 1–4 · B', 'stations: stop, interchange, commit, net flag · labels in a box'],
+  ['interchange', 'click a stack: a capsule across all its lines, at its angle · drag from line to line: one between them'],
   ['T · 1–7 · B · F', 'labels: text, box, rounded, net label, flag, along the line, pill · on a line / beside it · solid'],
   ['beside a line', 'labels and station names: pointer\'s side, off the stack\'s edge, clear of others · level / along / across'],
   ['X · 1–9, 0', 'perfboard (drag its size), R, C, diode, LED, pin header, socket, DIP, TO-92, module: click holes'],
@@ -668,6 +669,11 @@ export class Ligne {
       if (at.q !== c) kids.push(dot(at.q, 3.5, 'ligne-snap'))
     }
     if (this.mode === 'board' && c) kids.push(...this.boardPreview(c, path, dot))
+    const pr = this.press
+    if (this.mode === 'station' && this.shape === 'interchange' && pr && !pr.grab && c && dist(pr.at, c) * z > DRAG * 3) {
+      const a = this.snapLine(pr.at)?.q ?? pr.at, b = snapDir(a, this.snapLine(c)?.q ?? c, this.gridDirs())
+      kids.push(path(capsule(a, b, Math.max(16, 4 * 2.5) / 2), 'ligne-live', 2, '#1e1e1e'))
+    }
     for (const [a, b] of this.guides) {
       // past both ends a little, the reference point crossed
       const u = unit([b[0] - a[0], b[1] - a[1]]), e = 12 / z
@@ -796,7 +802,10 @@ export class Ligne {
     if (pr.dragging) this.drag(pr.grab!, this.scene(e), e.shiftKey, 'IMMEDIATELY')
     this.press = undefined
     if (pr.dragging) return this.draw()
-    if (this.mode === 'station') this.station(pr.at)
+    const to = this.scene(e)
+    if (this.mode === 'station' && this.shape === 'interchange' && dist(pr.at, to) * this.zoom() > DRAG * 3)
+      this.interchange(pr.at, to)
+    else if (this.mode === 'station') this.station(pr.at)
     else if (this.mode === 'label') this.label(pr.at)
     else if (this.mode === 'board') this.placePart(pr.at, this.scene(e))
     else this.start(pr.at, e.shiftKey)
@@ -931,11 +940,11 @@ export class Ligne {
       scene = start.map(e => moved.get(e.id) ?? e)
     } else {
       const m = g.kind === 'station' ? byId.get(g.mark.id) : undefined
-      const line = m && findLine(this.lines().map(l => l.el), m.customData.ligne.line)
+      const line = m && !m.customData.ligne.span && findLine(this.lines().map(l => l.el), m.customData.ligne.line)
       const at: XY = line ? nearest(centre(line), p).q : p
       // the mark's anchor: a net flag's first point, else the centre
-      const d0 = this.press!.at, c: XY = !m ? d0 : m.type === 'line' ? [m.x + m.points[0][0], m.y + m.points[0][1]]
-        : [m.x + m.width / 2, m.y + m.height / 2]
+      const d0 = this.press!.at, c: XY = !m ? d0 : m.customData.ligne.shape === 'net' ? [m.x + m.points[0][0], m.y + m.points[0][1]]
+        : middle(m)
       const d: XY = m ? [at[0] - c[0], at[1] - c[1]] : [p[0] - d0[0], p[1] - d0[1]]
       const moved = new Map(g.group.map(e => byId.get(e.id)).map(e => [e.id, bump(e, { x: e.x + d[0], y: e.y + d[1] })]))
       scene = start.map(e => moved.get(e.id) ?? e)
@@ -1534,6 +1543,7 @@ export class Ligne {
   /** Drops a station on the nearest line (or where clicked); a net flag points away from a line end. */
   private station(p: XY) {
     const hit = this.snapLine(p), n = this.graph().stations.length + 1
+    if (this.shape === 'interchange' && hit?.el && !hit.end) return this.interchange(p)
     const tip = hit?.end === 'end' ? hit.path.slice(-2) : hit?.end === 'start' ? hit.path.slice(0, 2).reverse() : []
     // on a line's body: the name beside it, on the side of the pointer, off the stack's edge
     const side = hit?.el && !hit.end && this.shape !== 'net' ? this.beside(hit.el, p) : undefined
@@ -1545,6 +1555,36 @@ export class Ligne {
       ...(side ? { angle: side.angle, away: side.away, off: side.off } : {}),
     })
     this.add(side ? this.unclutter(els, side.u, side.away, els.slice(1)) : els)
+  }
+
+  /** An interchange: across the stack at p (a ring on a lone line), or, dragged out to `to`, a
+   *  capsule from p's line to there (on the grid's directions), its name beside it. */
+  private interchange(p: XY, to?: XY) {
+    const hit = this.snapLine(p), n = this.graph().stations.length + 1, wmax = Math.max(4, ...this.lines().map(l => l.width))
+    const T = Math.max(16, wmax * 2.5)
+    let a: XY, b: XY, away: XY, off: number, angle = 0
+    if (to) {
+      a = hit?.q ?? p
+      b = snapDir(a, this.snapLine(to)?.q ?? to, this.gridDirs())
+      away = dist(a, b) > 1e-6 ? unit([b[0] - a[0], b[1] - a[1]]) : [0, -1]
+      const m: XY = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+      off = dist(a, b) / 2 + T / 2
+      p = m
+    } else {
+      const sd = this.beside(hit!.el, p), nl: XY = [-sd.u[1], sd.u[0]], w = bodyWidth(hit!.el)
+      const e1 = edgeOut(this.lines(), sd.q, nl, w / 2), e2 = edgeOut(this.lines(), sd.q, [-nl[0], -nl[1]], w / 2)
+      a = [sd.q[0] - nl[0] * (e2 - w / 2), sd.q[1] - nl[1] * (e2 - w / 2)]
+      b = [sd.q[0] + nl[0] * (e1 - w / 2), sd.q[1] + nl[1] * (e1 - w / 2)]
+      away = sd.away
+      const far = away[0] * nl[0] + away[1] * nl[1] > 0 ? e1 : e2
+      off = far - w / 2 + T / 2
+      angle = sd.angle
+      p = sd.q
+    }
+    const els = station(this.convert, { at: p, shape: 'interchange', line: hit?.el && lidOf(hit.el), boxed: this.boxed,
+      font: this.labelFont(), color: hit?.el?.strokeColor ?? '#1e1e1e', text: `S${n}`, span: [a, b], thick: T,
+      away, off, angle })
+    this.add(this.unclutter(els, [-away[1], away[0]], away, els.slice(1)))
   }
 
   /** Where a label beside line el goes for pointer p: the leg's direction there, the side of the

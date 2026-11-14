@@ -26,7 +26,7 @@ export type Cap = 'none' | 'bar' | 'dot' | 'disc'
 /** Text repeated along a line, set on it: font family and size, the paper colour knocked out. */
 export interface LineText { text: string, font: number, size: number, paper: string }
 /** customData.ligne of a station dot; its label is the text element in the same group. */
-export interface StationData { kind: 'station', line?: string, shape: Shape }
+export interface StationData { kind: 'station', line?: string, shape: Shape, span?: boolean }
 /** customData.ligne of a label on a line: its text and the knockout behind it. */
 export interface LabelData { kind: 'label', line?: string, on: boolean, type?: string }
 
@@ -59,6 +59,13 @@ export function parseLabel(text: string): { label: string, data: Record<string, 
   return { label: label.trim(), data }
 }
 
+/** The middle of an element: of its points' box for a linear one (a capsule), else of its box. */
+export function middle(e: El): XY {
+  if (!e.points?.length) return [e.x + e.width / 2, e.y + e.height / 2]
+  const xs = e.points.map(p => p[0]), ys = e.points.map(p => p[1])
+  return [e.x + (Math.min(...xs) + Math.max(...xs)) / 2, e.y + (Math.min(...ys) + Math.max(...ys)) / 2]
+}
+
 /** Distance along a polyline up to the point nearest p. */
 function along(pts: XY[], p: XY) {
   const n = nearest(pts, p)
@@ -89,7 +96,7 @@ export function graph(elements: readonly El[]): Graph {
   for (const e of elements) {
     if (kind(e) !== 'station') continue
     const d = e.customData.ligne as StationData
-    const at: XY = d.shape === 'net' && e.points ? abs(e, [e.points[0]])[0] : [e.x + e.width / 2, e.y + e.height / 2]
+    const at: XY = d.shape === 'net' && e.points ? abs(e, [e.points[0]])[0] : middle(e)
     const t = texts.find(t => t.groupIds?.some(g => e.groupIds?.includes(g)))
     const line = d.line && (lid.get(d.line) ?? d.line), pts = line ? drawn.get(line) : undefined
     stations.push({ id: e.id, line: line || undefined, shape: d.shape, at, ...parseLabel(t?.text ?? ''),

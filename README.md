@@ -69,6 +69,8 @@ order to start), clicked through in the popover. Ends popover: each end plain, a
 a band of the paper colour under the line, so a line crossing on top shows a gap.
 
 `s` stations (`1-4` stop/interchange/commit/net flag, `b` boxed label), following their line's colour.
+An interchange clicked on a stack is a capsule across all its lines, at the stack's angle (a ring on a
+lone line); dragged from one line to another (on the grid's directions), a capsule between them.
 `t` labels: `1-7` text, box, rounded box, net label (KiCad local: on the wire), flag (KiCad global: at a
 line end, pointing away), along (click a line: its repeated text), pill (a capsule in the line colour,
 `f`: outlined); on a line or beside it (`b`); `f` solid. Beside a line, a label goes on the pointer's
