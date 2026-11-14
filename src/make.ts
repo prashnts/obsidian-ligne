@@ -229,7 +229,7 @@ export function paper(convert: Convert, at: XY, size: keyof typeof PAPER, landsc
  *  Process, decision and icon are Excalidraw containers (double-click edits the text); the other
  *  shapes are one outline with the text over it; a table is a grid with its title in the top row. */
 export function block(convert: Convert, o: { kind: BlockKind, box: [number, number, number, number], text: string,
-  color: string, font: Font, rows?: number, cols?: number }): any[] {
+  color: string, font: Font, rows?: number, cols?: number, parts?: string[] }): any[] {
   const g = groupId(), [x, y, w, h] = o.box, bid = shortId()
   const data: BlockData = { kind: 'block', shape: o.kind, bid, ...(o.kind === 'table' ? { rows: o.rows ?? 3, cols: o.cols ?? 2 } : {}) }
   const look = { strokeColor: o.color, backgroundColor: '#ffffff', fillStyle: 'solid', strokeWidth: 2, roughness: 0 }
@@ -247,6 +247,23 @@ export function block(convert: Convert, o: { kind: BlockKind, box: [number, numb
     const els = make(convert, [{ type, x, y, width: w, height: h, ...look, roundness: o.kind === 'process' ? { type: 3 } : null,
       ...tag, label: { text: o.text, ...ink, ...(o.kind === 'icon' ? { fontSize: Math.round(h * .45) } : {}) } }])
     return els.map(e => ({ ...e, groupIds: [g] }))
+  }
+  if (o.kind === 'table' && o.parts) {
+    // compartments (nomnoml): the title in the head, then one row per compartment, its lines left
+    const [frame] = make(convert, [{ type: 'rectangle', x, y, width: w, height: h, ...look, roundness: null,
+      ...tag, customData: { ligne: { ...data, rows: o.parts.length + 1, cols: 1 } } }])
+    const tx = (t: string) => make(convert, [{ type: 'text', x: 0, y: 0, text: t, ...ink }])[0]
+    const head = tx(o.text), hh = head.height + 12, out: any[] = [frame]
+    out.push(...make(convert, [{ type: 'rectangle', x, y, width: w, height: hh, ...look, backgroundColor: mix(o.color),
+      roundness: null, groupIds: [g] }]), { ...head, x: x + w / 2 - head.width / 2, y: y + 6, groupIds: [g] })
+    let cy = y + hh
+    for (const part of o.parts) {
+      const t = tx(part)
+      out.push(make(convert, [{ type: 'line', x, y: cy, points: [[0, 0], [w, 0]], strokeColor: o.color, strokeWidth: 1,
+        roughness: 0, roundness: null, groupIds: [g] }])[0], { ...t, x: x + 8, y: cy + 6, groupIds: [g] })
+      cy += t.height + 12
+    }
+    return out
   }
   if (o.kind === 'table') {
     const rows = o.rows ?? 3, cols = o.cols ?? 2

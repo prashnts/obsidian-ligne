@@ -61,3 +61,9 @@
   border-radius: 8px; background: #1e1e1e; color: #fff; font: 12px var(--ui-font, system-ui); pointer-events: none; }
 .ligne-input { font-family: 'Cascadia', ui-monospace, monospace; }
 .ligne-for { font: 11px var(--ui-font, system-ui); opacity: .8; padding: 0 4px; }
+.ligne-dialog { position: absolute; z-index: 6; left: 50%; top: 120px; transform: translateX(-50%); display: grid; gap: 8px;
+  padding: 12px; width: min(520px, calc(100% - 32px)); font: 13px var(--ui-font, system-ui); }
+.ligne-dialog textarea { min-height: 160px; font: 12px ui-monospace, monospace; resize: vertical; padding: 6px;
+  border: 1px solid #ced4da; border-radius: 6px; background: #fff; color: #1e1e1e; }
+.ligne-dialog div { display: flex; gap: 8px; }
+.ligne-dialog button { padding: 4px 10px; border-radius: 6px; border: 1px solid #ced4da; background: #f8f9fa; cursor: pointer; }

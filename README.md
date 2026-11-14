@@ -89,6 +89,9 @@ onto the holes.
 `y` tidy, on the selected lines (else all): own bends at the radius most of them have, tiny jogs out,
 legs long enough for their arcs, room for connectors and joints; shown over the old lines (dashed red)
 until Enter (or `y`) keeps it as one step, Esc drops it.
+Import (sheets popover): a nomnoml diagram (`[A] -> [B]`, `[<database> Log]`, `[Api|url;token|get()]`,
+`-->` dashed, `<->`, `-:>`, `o->`, end labels, `#direction: right`) laid out in layers: its nodes as blocks,
+its links as lines docked on them.
 `k` legend, `p`/`P` A5/A6 frame (`o` landscape). `⇧C` copies the selection (else all) as SVG; the
 graph as text is in the sheets popover.
 

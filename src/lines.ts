@@ -99,7 +99,7 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   // a zone without a fill of its own is tinted with its stroke colour
   const tint = kind === 'zone' && !base && st.backgroundColor === 'transparent' && /^#[0-9a-f]{6}$/i.test(st.strokeColor)
   const [made] = convert([{ type: arrow ? 'arrow' : 'line', ...at, ...st,
-    roundness: null, startArrowhead: arrow ? st.startArrowhead : null, endArrowhead: arrow ? st.endArrowhead ?? 'arrow' : null,
+    roundness: null, startArrowhead: arrow ? st.startArrowhead : null, endArrowhead: arrow ? st.endArrowhead === undefined ? 'arrow' : st.endArrowhead : null,
     ...(tint ? { backgroundColor: st.strokeColor + '33', fillStyle: 'solid' } : {}),
     ...(pieces[0].fill ? { backgroundColor: typeof pieces[0].color === 'string' ? pieces[0].color : st.strokeColor,
       // the outline stays the line's colour: it is what restyles and rebuilds read back

@@ -32,6 +32,7 @@ import { graph, middle, toText, type Cap, type Link, type Shape } from './core/g
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { clear, edgeOut, type Box } from './core/place.ts'
 import { laneAt, type Track } from './core/snap.ts'
+import { diagram } from './diagram.ts'
 import { PARTS, PART_NAMES, clicks, board, holeAt, part, pinsAt, pinsOf, pitchOf, seat, span,
   type PartKind } from './board.ts'
 import { EXTRAS, bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, layered, lidOf, lineEls, pathOf, radiiOf, relink, replace,
@@ -1812,6 +1813,39 @@ export class Ligne {
     }, `${PREFIX[kind]}${n + 1} `)
   }
 
+  /** Asks for a nomnoml diagram and puts it in the middle of the view, in ligne's line style. */
+  private importNomnoml() {
+    const box = document.createElement('div'), area = document.createElement('textarea')
+    box.className = 'Island ligne-dialog'
+    area.placeholder = '[Sensor] reads -> [<database> Log]\n[Sensor] -> [<choice> OK?]\n#direction: right'
+    area.value = localStorage.getItem('ligne-nomnoml') ?? ''
+    const go = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Insert (Ctrl-Enter)' })
+    const no = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Cancel' })
+    const end = (keep: boolean) => {
+      box.remove()
+      this.container()?.focus({ preventScroll: true })
+      if (!keep || !area.value.trim()) return
+      localStorage.setItem('ligne-nomnoml', area.value)
+      const s = this.api.getAppState(), z = s.zoom.value
+      const els = diagram(this.convert, area.value, [s.width / 2 / z - s.scrollX, s.height / 2 / z - s.scrollY], this.labelFont(),
+        fromState(s), this.r)
+      if (!els.length) return this.flash('nomnoml: no nodes found')
+      this.add(els)
+      this.flash(`nomnoml: ${els.filter(e => e.customData?.ligne?.kind === 'block').length} blocks`)
+    }
+    go.onclick = () => end(true); no.onclick = () => end(false)
+    area.onkeydown = e => {
+      e.stopPropagation()
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) end(true)
+      if (e.key === 'Escape') end(false)
+    }
+    const row = document.createElement('div')
+    row.append(go, no)
+    box.append(Object.assign(document.createElement('b'), { textContent: 'nomnoml' }), area, row)
+    this.host.append(box)
+    setTimeout(() => area.focus())
+  }
+
   /** A small text box at scene point p; Enter (or leaving it) gives its text, Esc drops it. */
   private ask(p: XY, done: (text: string) => void, value = '', empty = false) {
     this.input?.remove()
@@ -2183,6 +2217,8 @@ export class Ligne {
           { icon: 'paper', title: 'A6 sheet', key: '⇧P', text: 'A6', click: A.P },
           { icon: 'landscape', title: 'Sheets in landscape', key: 'O', on: this.landscape, click: A.o }] },
         { label: 'Legend', items: [{ icon: 'legend', title: 'Legend (again: rebuild)', key: 'K', click: A.k }] },
+        { label: 'Import', items: [{ icon: 'b-process', text: 'nomnoml', title: 'A nomnoml diagram: its nodes as blocks, its links as lines',
+          click: () => { this.openMenu(); this.importNomnoml() } }] },
         { label: 'Copy', items: [{ icon: 'svg', text: 'SVG', title: 'Copy the selection (else all) as SVG', key: '⇧C',
           click: A.C }, { icon: 'copy', text: 'graph', title: 'Copy the graph as text: lines, stations, labels',
           click: () => this.copy() }] }] }
