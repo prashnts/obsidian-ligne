@@ -78,6 +78,10 @@ side, off the outer edge of its stack, and slides along clear of the labels alre
 station names read level, along the line (45° on diagonals, 90° on verticals) or across it (panel); font and
 size in the popover (Cascadia mono by default). Boxes are Excalidraw containers: double-click edits,
 Excalidraw turns and moves them; `r` / `⇧R` in select mode turns the selection 90° / 45°.
+`q` blocks: `1-9`, `0` process, decision, terminator, data, document, database, folder, table, text,
+icon: click (its usual size) or drag its box, then its text. A line started on a block leaves from the
+port (middle of a side) nearest the pointer, square to it; ending on one it comes in square. Lines
+docked on a block follow it when it moves, routed afresh on the grid when their legs no longer fit.
 `x` perfboard: `1` drag out a board (2.54 mm holes, true size ×1/2/4), `2-9`, `0` resistor, cap, diode,
 LED, male pin header, female socket, DIP, TO-92, module: click the first hole, then the last (TO-92: its middle), then ref and value
 (`R3 10k`). Lines over a board snap to its holes (wires). Parts moved or turned with Excalidraw go back

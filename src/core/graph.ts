@@ -2,6 +2,7 @@
 // Elements are Excalidraw-shaped, but only these fields are read, so any host with them works.
 import type { Cable } from './cable.ts'
 import type { Joint } from './joint.ts'
+import type { Dock } from './block.ts'
 import { nearest, type XY } from './geom.ts'
 
 export type Shape = 'stop' | 'interchange' | 'commit' | 'net'
@@ -19,7 +20,7 @@ export interface LineData {
   from?: string, to?: string, cable?: Cable, twist?: boolean, ticks?: boolean, arrow?: boolean,
   own?: string, stack?: string, np?: number, box?: [number, number, number, number], text?: LineText,
   grid?: 'octi' | 'iso', ends?: { start?: Cap, end?: Cap }, casing?: number, paper?: string,
-  joints?: { start?: Joint, end?: Joint },
+  joints?: { start?: Joint, end?: Joint }, docks?: { start?: Dock, end?: Dock },
 }
 /** A line's end: a bar across (terminus), an open dot, a filled disc. */
 export type Cap = 'none' | 'bar' | 'dot' | 'disc'

@@ -1,6 +1,7 @@
 // Excalidraw element skeletons ligne adds: station marks with labels, net flags, legend, paper frames.
 // Everything goes through the host's convertToExcalidrawElements, then text ids are shortened.
 import type { XY } from './core/geom.ts'
+import { inner, outline, type BlockData, type BlockKind } from './core/block.ts'
 import type { LabelData, Shape, StationData } from './core/graph.ts'
 
 /** Excalidraw's convertToExcalidrawElements, from whichever bundle the host ships. */
@@ -222,4 +223,59 @@ export function paper(convert: Convert, at: XY, size: keyof typeof PAPER, landsc
   const [a, b] = PAPER[size], mm = landscape ? [b, a] : [a, b], [w, h] = mm.map(v => v * MM)
   return convert([{ type: 'frame', x: at[0] - w / 2, y: at[1] - h / 2, width: w, height: h, children: [],
     name: `${size}${landscape ? ' landscape' : ''}`, customData: { ligne: { kind: 'paper', size, mm } } }])
+}
+
+/** A block in box x, y, w, h: its shape (customData: kind block, its id) and its text, grouped.
+ *  Process, decision and icon are Excalidraw containers (double-click edits the text); the other
+ *  shapes are one outline with the text over it; a table is a grid with its title in the top row. */
+export function block(convert: Convert, o: { kind: BlockKind, box: [number, number, number, number], text: string,
+  color: string, font: Font, rows?: number, cols?: number }): any[] {
+  const g = groupId(), [x, y, w, h] = o.box, bid = shortId()
+  const data: BlockData = { kind: 'block', shape: o.kind, bid, ...(o.kind === 'table' ? { rows: o.rows ?? 3, cols: o.cols ?? 2 } : {}) }
+  const look = { strokeColor: o.color, backgroundColor: '#ffffff', fillStyle: 'solid', strokeWidth: 2, roughness: 0 }
+  const tag = { groupIds: [g], customData: { ligne: data } }, ink = { ...o.font, strokeColor: '#1e1e1e' }
+  const text = (t: string, cx: number, cy: number) => {
+    const [e] = make(convert, [{ type: 'text', x: 0, y: 0, text: t, ...ink, textAlign: 'center' }])
+    return { ...e, x: cx - e.width / 2, y: cy - e.height / 2, groupIds: [g] }
+  }
+  if (o.kind === 'text') {
+    const t = text(o.text || 'text', x + w / 2, y + h / 2)
+    return [{ ...t, ...tag }]
+  }
+  if (o.kind === 'process' || o.kind === 'decision' || o.kind === 'icon') {
+    const type = o.kind === 'process' ? 'rectangle' : o.kind === 'decision' ? 'diamond' : 'ellipse'
+    const els = make(convert, [{ type, x, y, width: w, height: h, ...look, roundness: o.kind === 'process' ? { type: 3 } : null,
+      ...tag, label: { text: o.text, ...ink, ...(o.kind === 'icon' ? { fontSize: Math.round(h * .45) } : {}) } }])
+    return els.map(e => ({ ...e, groupIds: [g] }))
+  }
+  if (o.kind === 'table') {
+    const rows = o.rows ?? 3, cols = o.cols ?? 2
+    const [frame] = make(convert, [{ type: 'rectangle', x, y, width: w, height: h, ...look, roundness: null, ...tag }])
+    const [head] = make(convert, [{ type: 'rectangle', x, y, width: w, height: h / rows, ...look, backgroundColor: mix(o.color),
+      roundness: null, groupIds: [g] }])
+    const lines = inner('table', w, h, rows, cols).map(l => make(convert, [{ type: 'line', x: x + l[0][0], y: y + l[0][1],
+      points: l.map(p => [p[0] - l[0][0], p[1] - l[0][1]]), strokeColor: o.color, strokeWidth: 1, roughness: 0,
+      roundness: null, groupIds: [g] }])[0])
+    return [frame, head, ...lines, text(o.text, x + w / 2, y + h / rows / 2)]
+  }
+  const pts = outline(o.kind, w, h)!, extra = inner(o.kind, w, h)
+  const [shape] = make(convert, [{ type: 'line', x: x + pts[0][0], y: y + pts[0][1], points: pts.map(p => [p[0] - pts[0][0],
+    p[1] - pts[0][1]]), ...look, roundness: null, ...tag }])
+  const more = extra.map(l => make(convert, [{ type: 'line', x: x + l[0][0], y: y + l[0][1],
+    points: l.map(p => [p[0] - l[0][0], p[1] - l[0][1]]), strokeColor: o.color, strokeWidth: 2, roughness: 0,
+    roundness: null, groupIds: [g] }])[0])
+  // the text in the body: below a database's lid, below a folder's tab
+  const cy = o.kind === 'database' ? y + h * .55 : o.kind === 'folder' ? y + h * .58 : o.kind === 'document' ? y + h * .44 : y + h / 2
+  return [shape, ...more, ...(o.text ? [text(o.text, x + w / 2, cy)] : [])]
+}
+
+/** A light tint of a #rrggbb colour (table headers). */
+const mix = (c: string) => /^#[0-9a-f]{6}$/i.test(c) ? c + '22' : '#f1f3f5'
+
+/** A block's box: of its points for an outline, else its own. */
+export function blockBox(e: any): [number, number, number, number] {
+  if (!e.points?.length) return [e.x, e.y, e.width, e.height]
+  const xs = e.points.map((p: XY) => p[0]), ys = e.points.map((p: XY) => p[1])
+  const x0 = Math.min(...xs), y0 = Math.min(...ys)
+  return [e.x + x0, e.y + y0, Math.max(...xs) - x0, Math.max(...ys) - y0]
 }

@@ -18,11 +18,12 @@
 // Stops line up with what is drawn (guides), with the grid (G: square, isometric) and with a
 // perfboard's holes. S stations, T labels (text, boxes, net labels), X perfboards and parts.
 import { STYLES, cableWidth, fanLeg, isSheathed, type Cable, type CableStyle } from './core/cable.ts'
+import { BLOCKS, SIZE, nearestPort, outOf, portAt, type BlockKind, type Dock, type Port } from './core/block.ts'
 import { COAX, COAX_KINDS, type CoaxKind } from './core/coax.ts'
 import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, across, endOf, flatTips, isFlat, swatch, wire, wirePitch,
   type Conn } from './core/flat.ts'
 import { JOINTS, JOINT_NAMES, jointReach, type JointKind } from './core/joint.ts'
-import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
+import { beside, carry, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt, simplify,
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
 import { dropBend, dropJogs, jog, legNormal, roomBends, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
 import { bendOf, needs } from './core/lead.ts'
@@ -35,7 +36,7 @@ import { PARTS, PART_NAMES, clicks, board, holeAt, part, pinsAt, pinsOf, pitchOf
   type PartKind } from './board.ts'
 import { EXTRAS, bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, layered, lidOf, lineEls, pathOf, radiiOf, relink, replace,
   onLanes, resized, restack, specOf, stale, type Spec } from './lines.ts'
-import { DOT, FONTS, LABELS, PAPER, SIZES, bump, capsule, fromState, groupId, label, legend, paper, station, styleOf, toState,
+import { DOT, FONTS, LABELS, PAPER, SIZES, block, blockBox, bump, capsule, fromState, groupId, label, legend, paper, station, styleOf, toState,
   turned, type Convert, type Font, type LabelDir, type LabelType, type Style } from './make.ts'
 import { Panel, type Btn, type Item, type Menu } from './ui.ts'
 
@@ -66,7 +67,7 @@ const DOUBLE = 450                                // ms: presses closer in time 
 const SAVED = 'ligne-style', OPTS = 'ligne-opts'
 const DEFAULT: Partial<Style> = { strokeWidth: 4, roughness: 0, strokeStyle: 'solid', opacity: 100 }
 const SHAPES: Record<string, Shape> = { '1': 'stop', '2': 'interchange', '3': 'commit', '4': 'net' }
-type Mode = 'line' | 'station' | 'label' | 'board' | 'select'
+type Mode = 'line' | 'station' | 'label' | 'board' | 'block' | 'select'
 type GridMode = 'off' | 'square' | 'iso'
 const GRIDS: GridMode[] = ['off', 'square', 'iso']
 const PREFIX: Record<PartKind, string> = { board: '', R: 'R', C: 'C', D: 'D', LED: 'LED', J: 'J', F: 'J', DIP: 'U', TO92: 'Q',
@@ -75,7 +76,7 @@ const PREFIX: Record<PartKind, string> = { board: '', R: 'R', C: 'C', D: 'D', LE
 const FORWARD = 'zyxcvdag'
 
 const HELP: [string, string][] = [
-  ['V / Esc · L · S · T · X', 'select · lines · stations · labels · perfboard (again: back to lines)'],
+  ['V / Esc · L · S · T · X · Q', 'select · lines · stations · labels · perfboard · blocks (again: back to lines)'],
   ['click', 'stop · on a line: branch (peels off, trunk style) · on its end: extend (same style)'],
   ['beside a line', 'its free lanes: joins and leaves at 45° in a curve, follows it bend for bend'],
   ['- / =', 'lane gap: set the line a little further out · select mode: the selected lines'],
@@ -112,6 +113,7 @@ const HELP: [string, string][] = [
   ['interchange', 'click a stack: a capsule across all its lines, at its angle · drag from line to line: one between them'],
   ['T · 1–7 · B · F', 'labels: text, box, rounded, net label, flag, along the line, pill · on a line / beside it · solid'],
   ['beside a line', 'labels and station names: pointer\'s side, off the stack\'s edge, clear of others · level / along / across'],
+  ['Q · 1–9, 0', 'blocks: process, decision, terminator, data, document, database, folder, table, text, icon · lines dock on their sides and follow them'],
   ['X · 1–9, 0', 'perfboard (drag its size), R, C, diode, LED, pin header, socket, DIP, TO-92, module: click holes'],
   ['R / ⇧R', 'select mode: turn the selection 90° / 45° (parts about pin 1)'],
   ['Y', 'tidy the selected lines (else all): even bends, tiny jogs out, room for arcs, connectors and joints · Enter keeps, Esc drops'],
@@ -177,6 +179,9 @@ export class Ligne {
   gridMode: GridMode = 'off'
   labelType: LabelType = 'text'
   labelDir: LabelDir = 'along'                     // labels and station names: level, along the line, across it
+  blockKind: BlockKind = 'process'
+  private dockStart?: Dock                         // the line being drawn left this block's port
+  private blockBoxes = new Map<string, string>()   // block id → its box last seen, to move docked line ends
   solid = false                                    // labels: filled with the colour
   font: keyof typeof FONTS = 'mono'
   size = 16
@@ -294,6 +299,7 @@ export class Ligne {
   private changed(s: any) {
     this.panel.mount()
     if (!this.press?.dragging) this.follow()
+    this.followBlocks()
     // parts are put back on their holes once Excalidraw is done moving or turning them
     const busy = (st: any) => st.selectedElementsAreBeingDragged || st.isRotating || st.isResizing
     const fix = (els: readonly any[]) => resized(els) ?? relink(els) ?? (busy(this.api.getAppState()) ? undefined : seat(els))
@@ -505,10 +511,15 @@ export class Ligne {
       legs = [...ks.map(k => offsetAt(path, k, 0, d)), ln.q]
       meta = [...ks.map(k => ({ r: conc[k], link: { of, i: k, t: 0, d } })), this.onLane(ln)]
     } else {
-      const spot = closing || ln || hit ? undefined : this.placed(c)
+      const port = closing || ln || hit ? undefined : this.portAt(c)
+      const spot = closing || ln || hit || port ? undefined : this.placed(c)
       this.guides = spot?.guides ?? []
-      const to = closing ? this.pts[0] : ln?.q ?? hit?.q ?? spot!.q, diag = this.order(last, to, prev, ln)
+      // into a block's port: square to its side, after a short stub
+      const o = port && outOf(port.port), stub = this.stub()
+      const pre: XY | undefined = port && [port.at[0] + o![0] * stub, port.at[1] + o![1] * stub]
+      const to = closing ? this.pts[0] : ln?.q ?? hit?.q ?? pre ?? spot!.q, diag = this.order(last, to, prev, ln)
       legs = free ? [last, snapDir(last, to, g)] : octi(last, to, diag, undefined, g)
+      if (port) legs = [...legs, port.at]
       // never double straight back on the incoming leg
       const first = legs.length === 3 && unit([legs[1][0] - last[0], legs[1][1] - last[1]])
       if (!free && inDir && first && first[0] * inDir[0] + first[1] * inDir[1] < -0.5) legs = octi(last, to, !diag, undefined, g)
@@ -640,6 +651,8 @@ export class Ligne {
       concentric(ln.path, ln.radii, ln.d)), 'ligne-guide', 1.5), dot(ln.q, 5, 'ligne-snap lane'))
     const g = c && !n ? this.grab(c) : undefined
     const jn = c && !n && this.mode === 'line' && this.joinMode ? this.joinAt(c) : undefined
+    const port = c && this.mode === 'line' && !jn && !this.snapLine(c) ? this.portAt(c) : undefined
+    if (port) kids.push(dot(port.at, 6, 'ligne-snap end'))
     if (jn) kids.push(dot(jn.at, 6, 'ligne-snap end'))
     else if (c && n && (this.closing(c) || this.near(c, this.pts[n - 1])))
       kids.push(dot(this.closing(c) ? this.pts[0] : this.pts[n - 1], 8, 'ligne-snap end'))
@@ -739,11 +752,13 @@ export class Ligne {
     }
     if (this.mode === 'label') return this.lineAt(p) ? `${this.labelType} label on the line` : `${this.labelType} label`
     if (this.mode === 'station') return this.snapLine(p)?.el ? 'station on the line' : 'station'
+    if (this.mode === 'block') return `${this.blockKind}: click, or drag its box`
     if (this.mode !== 'line') return
     if (this.pts.length) {
       const sp = this.split, t = sp && this.pts.length === 2 && this.wireAt(p)
       if (t && t.el.id === sp!.el.id && t.end === sp!.end) return `bundle up to wire ${t.j + 1}`
       if (this.closing(p)) return 'close: zone'
+      if (!this.snapLine(p) && this.portAt(p)) return 'into the block, square to its side'
       if (this.near(p, this.pts[this.pts.length - 1])) return 'end the line'
       return
     }
@@ -759,6 +774,7 @@ export class Ligne {
     if (hit?.end) return 'extend'
     if (this.lane(p)) return 'beside it'
     if (hit?.el) return 'click: branch · drag: move the leg (⇧: jog)'
+    if (this.portAt(p)) return 'from the block, square to its side'
     return 'new line'
   }
 
@@ -813,6 +829,7 @@ export class Ligne {
     else if (this.mode === 'station') this.station(pr.at)
     else if (this.mode === 'label') this.label(pr.at)
     else if (this.mode === 'board') this.placePart(pr.at, this.scene(e))
+    else if (this.mode === 'block') this.placeBlock(pr.at, this.scene(e))
     else this.start(pr.at, e.shiftKey)
     this.draw()
   }
@@ -1058,6 +1075,16 @@ export class Ligne {
   private start(p: XY, shift = false) {
     const jn = this.joinMode && this.joinAt(p)
     if (jn) return this.startJoin(jn)
+    const port = !this.snapLine(p) ? this.portAt(p) : undefined
+    if (port) {
+      // out of a block's port, square to its side
+      this.reset()
+      const o = outOf(port.port), lead = this.stub()
+      this.pts = [port.at, [port.at[0] + o[0] * lead, port.at[1] + o[1] * lead]]
+      this.meta = [{ r: this.r, link: null }, { r: this.r, link: null }]
+      this.dockStart = { block: port.bid, port: port.port }
+      return
+    }
     // a flat cable's end: a fanned wire goes on; a wire starts a bundle of it (⇧: the whole cable goes on)
     const leg = this.legAt(p), t = !leg && this.wireAt(p)
     if (leg) return this.fromLeg(leg)
@@ -1343,9 +1370,9 @@ export class Ligne {
 
   private save() {
     const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, ends, casing, byNet,
-      nextColor, jointKind, labelDir } = this
+      nextColor, jointKind, labelDir, blockKind } = this
     localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
-      scale, ends, casing, byNet, nextColor, jointKind, labelDir }))
+      scale, ends, casing, byNet, nextColor, jointKind, labelDir, blockKind }))
   }
 
   private undoStop() {
@@ -1406,6 +1433,7 @@ export class Ligne {
     if (this.mode === 'station' && SHAPES[n]) this.shape = SHAPES[n]
     else if (this.mode === 'label' && LABELS[n - 1]) this.labelType = LABELS[n - 1]
     else if (this.mode === 'board' && PARTS[n - 1]) { this.partKind = PARTS[n - 1]; this.pin = undefined }
+    else if (this.mode === 'block' && BLOCKS[n - 1]) this.blockKind = BLOCKS[n - 1]
     else return false
     this.save()
     return true
@@ -1421,6 +1449,7 @@ export class Ligne {
     s: () => this.setMode(this.mode === 'station' ? 'line' : 'station'),
     t: () => this.setMode(this.mode === 'label' ? 'line' : 'label'),
     x: () => this.setMode(this.mode === 'board' ? 'line' : 'board'),
+    q: () => this.setMode(this.mode === 'block' ? 'line' : 'block'),
     v: () => this.setMode('select'),
     T: () => { this.setMode('label'); this.labelType = 'along'; this.save(); this.panelUI() },
     o: () => this.toggle('landscape'), '?': () => this.toggle('help'),
@@ -1463,7 +1492,7 @@ export class Ligne {
   }
   private reset() {
     this.pts = []; this.meta = []
-    this.from = this.editing = this.fork = this.lead = this.track = this.split = this.pin = this.joining = undefined
+    this.from = this.editing = this.fork = this.lead = this.track = this.split = this.pin = this.joining = this.dockStart = undefined
     this.bend = this.flip = this.startBack = false
     this.guides = []
     this.draw()
@@ -1562,6 +1591,102 @@ export class Ligne {
       ...(side ? { angle: side.angle, away: side.away, off: side.off } : {}),
     })
     this.add(side ? this.unclutter(els, side.u, side.away, els.slice(1)) : els)
+  }
+
+  /** The blocks in the scene: shape element, id, box. */
+  private blocks() {
+    return this.live().filter(e => e.customData?.ligne?.kind === 'block')
+      .map(e => ({ el: e, bid: e.customData.ligne.bid as string, box: blockBox(e) }))
+  }
+
+  /** A block's port near p (inside the block, or just outside it): block id, port, its point. */
+  private portAt(p: XY) {
+    if (!this.snapping() || this.mode !== 'line') return
+    const tol = 2 * SNAP / this.zoom()
+    for (const b of this.blocks()) {
+      const [x, y, w, h] = b.box
+      if (p[0] < x - tol || p[0] > x + w + tol || p[1] < y - tol || p[1] > y + h + tol) continue
+      const n = nearestPort(b.box, p)
+      return { bid: b.bid, port: n.port, at: n.at }
+    }
+  }
+
+  /** The straight bit a line leaves or enters a port with. */
+  private stub() { return Math.max(this.r + 8, 2 * SNAP / this.zoom()) }
+
+  /** A finished line's docks: where it left a port, where it ends on one (an extended line keeps
+   *  those of its other end). */
+  private docksOf(pts: XY[], had?: { start?: Dock, end?: Dock }) {
+    const end = (q: XY): Dock | undefined => {
+      for (const b of this.blocks()) for (const port of ['n', 'e', 's', 'w'] as Port[])
+        if (dist(portAt(b.box, port), q) < 1e-6) return { block: b.bid, port }
+    }
+    const rev = this.editing?.reversed
+    const start = rev ? end(pts[0]) : this.dockStart ?? had?.start ?? end(pts[0])
+    const fin = rev ? had?.end ?? end(pts[pts.length - 1]) : end(pts[pts.length - 1])
+    return start || fin ? { start, end: fin } : undefined
+  }
+
+  /** Blocks mode: a block at p (a click: its usual size, centred; a drag: that box), then its text. */
+  private placeBlock(p: XY, to: XY) {
+    const kind = this.blockKind, [w0, h0] = SIZE[kind]
+    const dragged = dist(p, to) * this.zoom() > DRAG * 3
+    const a = this.placed(p).q, b = this.placed(to).q
+    const box: [number, number, number, number] = dragged
+      ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(24, Math.abs(b[0] - a[0])), Math.max(24, Math.abs(b[1] - a[1]))]
+      : [a[0] - w0 / 2, a[1] - h0 / 2, w0, h0]
+    const s = this.api.getAppState()
+    this.ask([box[0] + box[2] / 2, box[1] + box[3] / 2], text => this.add(block(this.convert, { kind, box, text,
+      color: s.currentItemStrokeColor, font: this.labelFont() })), kind === 'icon' ? '★' : '', true)
+  }
+
+  /** Blocks moved (by Excalidraw or undo): the ends of lines docked on them follow, their stubs with
+   *  them, the legs after carried along so that they keep their directions. Not in history: undo moves
+   *  the block back and this follows again. */
+  private followBlocks() {
+    const now = new Map(this.blocks().map(b => [b.bid, b.box.map(v => Math.round(v * 100) / 100).join()]))
+    const moved = [...now].filter(([id, k]) => this.blockBoxes.has(id) && this.blockBoxes.get(id) !== k).map(([id]) => id)
+    this.blockBoxes = now
+    if (!moved.length) return
+    const boxes = new Map(this.blocks().map(b => [b.bid, b.box]))
+    setTimeout(() => {
+      let scene = this.api.getSceneElements().slice(), hit = false
+      for (const e of scene.filter(e => isLine(e) && !stale(e) && dataOf(e)!.docks)) {
+        const s = specOf(e), dk = s.docks!, n = s.path.length
+        let changed = false
+        for (const [end, j, k] of [['start', 0, 1], ['end', n - 1, n - 2]] as const) {
+          const d = dk[end], box = d && moved.includes(d.block) && boxes.get(d.block)
+          if (!d || !box) continue
+          const to = portAt(box, d.port), by: XY = [to[0] - s.path[j][0], to[1] - s.path[j][1]]
+          if (Math.hypot(...by) < 1e-6) continue
+          // the stub moves whole; the legs after it shift by the part of the move across them
+          s.path[j] = to
+          if (n > 2) {
+            s.path[k] = [s.path[k][0] + by[0], s.path[k][1] + by[1]]
+            const far = end === 'start' ? n - 1 : 0
+            s.path = carry(s.path, k, by, i => i === j || i === far && !!dk[end === 'start' ? 'end' : 'start'] || !!s.links?.[i])
+          }
+          changed = true
+        }
+        if (!changed) continue
+        // legs that left the grid: the line is routed afresh between its stubs
+        const g = s.grid ?? 'octi', onGrid = s.path.every((q, i) => i === 0 || dist(snapDir(s.path[i - 1], q, g), q) < 1e-3)
+        if (!onGrid) {
+          const ends = (['start', 'end'] as const).map(end => {
+            const d = dk[end], box = d && boxes.get(d.block), at = end === 'start' ? s.path[0] : s.path[n - 1]
+            if (!d || !box) return { at, stub: at }
+            const o = outOf(d.port), p = portAt(box, d.port), k = this.stub()
+            return { at: p, stub: [p[0] + o[0] * k, p[1] + o[1] * k] as XY, out: o }
+          })
+          const [a, b] = ends, mid = octi(a.stub, b.stub, undefined, a.out, g)
+          const pts = simplify([a.at, ...mid, b.at])
+          s.path = pts; s.radii = pts.map(() => s.r); s.links = undefined
+        }
+        scene = restack(this.convert, replace(scene, lineEls(this.convert, s, styleOf(e), e)), e.id)
+        hit = true
+      }
+      if (hit) this.put(scene, 'NEVER')
+    })
   }
 
   /** An interchange: across the stack at p (a ring on a lone line), or, dragged out to `to`, a
@@ -1747,7 +1872,8 @@ export class Ligne {
     const spec: Spec = { kind: closed ? 'zone' : 'line', lid: d?.lid, path: pts, radii: meta.map(m => m.r),
       links: meta.map(m => m.link), r: this.r, from: this.from, to: endHit ? lidOf(endHit.el) : d?.to, stack,
       cable: this.twist ? this.made(meta, d?.cable) : undefined, ticks: this.ticks, arrow: this.arrow, own: d?.own,
-      grid: this.gridDirs() === 'iso' ? 'iso' : undefined, text: d?.text, ...this.endsSpec() }
+      grid: this.gridDirs() === 'iso' ? 'iso' : undefined, text: d?.text, ...this.endsSpec(),
+      docks: this.docksOf(pts, d?.docks) }
     const els = lineEls(this.convert, spec, fromState(this.api.getAppState()), base)
     if (base) {
       const shift = ed.reversed ? pts.length - ed.n : 0
@@ -2072,6 +2198,8 @@ export class Ligne {
       { icon: 'station', title: 'Stations', key: 'S', on: mode === 'station', click: () => this.setMode('station') },
       { icon: 'label', title: 'Labels', key: 'T', on: mode === 'label', click: () => this.setMode('label') },
       { icon: 'board', title: 'Perfboard and parts', key: 'X', on: mode === 'board', click: () => this.setMode('board') },
+      { icon: 'b-process', title: 'Blocks: flowchart shapes, folder, table, text, icon; lines dock on their sides', key: 'Q',
+        on: mode === 'block', click: () => this.setMode('block') },
       'sep',
       ...(mode === 'line' ? [
         { icon: 'free', title: 'Free legs, along the grid\'s directions (or hold Shift)', key: '⇧', on: this.free,
@@ -2122,6 +2250,10 @@ export class Ligne {
         ...opt('Perfboard: 2.54 mm true size ×', [1, 2, 4], this.scale, v => { this.scale = v; this.save(); this.panelUI() },
           v => `×${v}`),
         font,
+      ] : mode === 'block' ? [
+        ...BLOCKS.map((k, i) => ({ icon: 'b-' + k, title: `${k[0].toUpperCase() + k.slice(1)}: click (its size) or drag a box`,
+          key: String((i + 1) % 10), on: this.blockKind === k, click: () => { this.digit(i + 1); this.panelUI() } })),
+        'sep' as const, colors, font,
       ] : [colors, cable, ends, { icon: 'tidy', title: 'Tidy the selected lines (else all); Enter keeps, Esc drops', key: 'Y',
           on: !!this.tidying, click: A.y }, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
         { icon: 'gap', title: 'Move the selected lines out on their lanes (- in)', key: '=', click: A['='] }]),
