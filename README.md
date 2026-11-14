@@ -17,7 +17,9 @@ again (or double-click, Enter) to end; end on the first stop for a zone; `Backsp
 Ctrl-Z takes back a stop; idle, `Esc` (or `v`) selects with Excalidraw's selection while ligne stays on
 (its keys act on the selection; `Esc` with nothing selected: back to drawing). Start on a line to branch (tube-map fork, trunk style); on its end to extend
 it in its own style; end on a line (or loop back onto the line being drawn) for a junction. Drag a
-waypoint to move it (both its legs stay at 45°). Beside a line the pointer snaps to its free lanes,
+waypoint to move it (both its legs stay at 45°); drag a leg to move it sideways (its neighbours stretch,
+a leg pushed flush drops out), ⇧-drag to put a jog in it; double-click a bend to take it out. In select
+mode a line that is not selected is edited the same way (a click selects just it); a selected one moves. Beside a line the pointer snaps to its free lanes,
 harder along the leg being drawn, and holds a lane once on it: the new line follows bend for bend and
 joins / leaves at 45°. Lines sharing lanes are a stack (Excalidraw group); double-click picks the one
 line under the pointer, in ligne or not. Hold Ctrl/Cmd (or `n`) to place anywhere. Bend radius

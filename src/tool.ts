@@ -22,6 +22,7 @@ import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, endOf, flatTips, isFlat, sw
   type Conn } from './core/flat.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
+import { dropBend, jog, legNormal, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
 import { graph, toText, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { laneAt, type Track } from './core/snap.ts'
@@ -80,7 +81,9 @@ const HELP: [string, string][] = [
   ['[ / ] · slider', 'bend radius (0: sharp), shown as you draw; idle: the selected lines'],
   ['click last stop', 'end the line (also double-click, Enter)'],
   ['click first stop', 'close into a zone, under the lines it crosses'],
-  ['drag', 'waypoint (both legs stay on the grid) · cable leg tip · station · label'],
+  ['drag', 'waypoint (both legs stay on the grid) · a leg: sideways (⇧: a jog) · cable leg tip · station · label'],
+  ['double-click a bend', 'take it out (when a straight leg fits) · a leg pushed flush also drops its bends'],
+  ['select mode', 'a line not selected: drag edits it, click selects just it · a selected one: Excalidraw moves it'],
   ['double-click a line', 'select just it, even in a stack'],
   ['Shift / ⇧ button', 'free leg, along the grid\'s directions'],
   ['Backspace / Ctrl-Z · Esc', 'undo a stop · cancel'], ['Alt-click / I', "take a line's style"],
@@ -129,6 +132,7 @@ type Grab =
   | { kind: 'tag', group: any[], line?: any }
   | { kind: 'point', el: any, i: number }
   | { kind: 'leg', el: any, end: 'start' | 'end', j: number }
+  | { kind: 'seg', el: any, k: number, at: XY, jog: boolean }
 
 export class Ligne {
   active = false
@@ -204,6 +208,17 @@ export class Ligne {
     on(this.layer, 'dblclick', e => this.dbl(e))
     on(this.layer, 'wheel', e => this.canvas()?.dispatchEvent(new WheelEvent('wheel', e)))
     on(window, 'keydown', e => this.key(e))
+    // select mode: a line not selected is edited by dragging it, not moved with its group
+    on(host, 'pointerdown', e => this.selectDown(e))
+    // select mode, double-click on a line: a bend goes, else just the line is selected (Excalidraw's
+    // own line editor would leave ligne's waypoints behind)
+    on(host, 'dblclick', e => {
+      if (!this.active || this.mode !== 'select' || !(e.target instanceof HTMLCanvasElement)) return
+      const p = this.scene(e), l = this.lineAt(p)
+      if (!l && !this.editGrab(p)) return
+      e.preventDefault(); e.stopImmediatePropagation()
+      if (!this.dropAt(p) && l) this.select(l.el)
+    })
     // Excalidraw's own double-click into a stack: select the line nearest the pointer, not the top one
     on(host, 'dblclick', e => { if (!this.active || this.mode === 'select') setTimeout(() => this.refine(this.scene(e))) },
       false)
@@ -688,15 +703,15 @@ export class Ligne {
       return
     }
     const g = this.grab(p)
-    if (g?.kind === 'point') return 'drag: move the bend'
-    if (g && g.kind !== 'leg') return 'drag: move'
+    if (g?.kind === 'point') return 'drag: move the bend · double-click: take it out'
+    if (g && g.kind !== 'leg' && g.kind !== 'seg') return 'drag: move'
     if (this.legAt(p)) return 'click: the wire goes on · drag: move'
     const w = this.wireAt(p)
     if (w) return `click: wire ${w.j + 1} goes on (⇧: the cable) · drag: fan out`
     const hit = this.snapLine(p)
     if (hit?.end) return 'extend'
     if (this.lane(p)) return 'beside it'
-    if (hit?.el) return 'branch'
+    if (hit?.el) return 'click: branch · drag: move the leg (⇧: jog)'
     return 'new line'
   }
 
@@ -712,12 +727,14 @@ export class Ligne {
     this.mod = e.ctrlKey || e.metaKey
     if (e.altKey || this.picking) return this.pick(p)
     if (this.pts.length) {
+      // a line ended by this press (not a stop just started): its double-click is not one on the canvas
+      const had = this.pts.length
       this.stop(p, e.shiftKey)
-      if (!this.pts.length) this.ended = { t: performance.now(), at: [e.clientX, e.clientY] }
+      if (!this.pts.length && had > 1) this.ended = { t: performance.now(), at: [e.clientX, e.clientY] }
       return
     }
     this.layer.setPointerCapture(e.pointerId)
-    this.press = { at: p, grab: this.grab(p), start: this.api.getSceneElements().slice() }
+    this.press = { at: p, grab: this.grab(p, e.shiftKey), start: this.api.getSceneElements().slice() }
   }
 
   private move(e: PointerEvent) {
@@ -756,6 +773,7 @@ export class Ligne {
     const fresh = this.editing ? this.pts.length === this.editing.n : this.pts.length <= 1
     if (!fresh) return this.finish()
     this.reset()
+    if (this.dropAt(this.scene(e))) return
     const l = this.lineAt(this.scene(e))
     if (l) this.select(l.el)
   }
@@ -790,7 +808,7 @@ export class Ligne {
   }
 
   /** What a press at p would drag: a station mark or label, a line label, a cable leg tip, a waypoint. */
-  private grab(p: XY): Grab | undefined {
+  private grab(p: XY, shift = false): Grab | undefined {
     const tol = SNAP / this.zoom(), els = this.live()
     const inside = (e: any, pad = 0) => {
       // in the element's own frame, as it may be turned
@@ -813,10 +831,20 @@ export class Ligne {
       .flatMap(l => this.tips(l.el).map(t => ({ ...t, el: l.el })))
       .map(t => ({ t, d: dist(p, t.at) })).sort((a, b) => a.d - b.d)[0]
     if (tip && tip.d < tol * 0.6) return { kind: 'leg', el: tip.t.el, end: tip.t.end, j: tip.t.j }
+    return this.editGrab(p, shift)
+  }
+
+  /** A waypoint of a line at p, else one of its legs (⇧: to put a jog in). */
+  private editGrab(p: XY, shift = false): Grab | undefined {
+    const tol = SNAP / this.zoom()
     for (const l of this.lines(true)) {
       const i = l.path.findIndex(q => dist(p, q) < tol)
       if (i >= 0) return { kind: 'point', el: l.el, i }
     }
+    const l = this.lineAt(p)
+    if (!l) return
+    const k = Math.min(nearest(l.path, p).i, l.path.length - 2), q = nearest(l.path.slice(k, k + 2), p).q
+    return { kind: 'seg', el: l.el, k, at: q, jog: shift }
   }
 
   /** Drags a grab to p, from the scene as it was at the press. */
@@ -847,6 +875,10 @@ export class Ligne {
         s.cable = { ...c, legs: { ...legs, [g.end]: list } }
       }
       scene = restack(this.convert, replace(start, lineEls(this.convert, s, styleOf(el), el)), el.id)
+    } else if (g.kind === 'seg') {
+      const el = byId.get(g.el.id), s = specOf(el)
+      const moved = this.editSeg(s, g, p)
+      scene = moved ? restack(this.convert, replace(start, lineEls(this.convert, moved, styleOf(el), el)), el.id) : start.slice()
     } else if (g.kind === 'tag') {
       // along its line, turned to read along it
       const line = g.line && this.lines().find(l => l.el.id === g.line.id)
@@ -872,6 +904,80 @@ export class Ligne {
       scene = start.map(e => moved.get(e.id) ?? e)
     }
     this.put(scene, capture)
+  }
+
+  /** Line s with leg g.k moved (or a jog put in at g.at) so that it passes the pointer p, lined up
+   *  with what is drawn; legs pushed flush drop out. Its moved waypoints leave any lanes. */
+  private editSeg(s: Spec, g: Extract<Grab, { kind: 'seg' }>, p: XY): Spec | undefined {
+    const grid = s.grid ?? 'octi', nk = legNormal(s.path, g.k)
+    const refs = this.press!.refs ??= this.refs().filter(r => !s.path.some(q => same(q, r)))
+    const q = this.placed(p, refs)
+    this.guides = q.guides
+    const d = (q.q[0] - g.at[0]) * nk[0] + (q.q[1] - g.at[1]) * nk[1]
+    let al: Along = { radii: s.radii, links: s.links, folds: s.cable?.folds }, pts: XY[] | undefined, moved: number[]
+    if (g.jog) {
+      pts = jog(s.path, g.k, g.at, d, grid)
+      if (pts) al = spliceAlong(al, g.k + 1, 0, 2, s.r)
+      moved = [g.k + 1, g.k + 2, g.k + 3]
+    } else {
+      pts = shiftLeg(s.path, g.k, d)?.pts
+      moved = [g.k, g.k + 1]
+    }
+    if (!pts) return
+    if (al.links) al = { ...al, links: al.links.map((l, i) => moved.includes(i) ? null : l) }
+    const t = tidyAlong(pts, al)
+    return { ...s, path: t.pts, radii: t.al.radii, links: t.al.links,
+      cable: s.cable && { ...s.cable, folds: t.al.folds } }
+  }
+
+  /** Double-click on a bend: it goes, when a straight leg on the grid can take its place. */
+  private dropAt(p: XY): boolean {
+    const g = this.editGrab(p)
+    if (g?.kind !== 'point') return false
+    const s = specOf(g.el), pts = dropBend(s.path, g.i, s.grid ?? 'octi')
+    if (!pts) { this.flash('no straight leg fits: drag a leg instead'); return true }
+    const al = spliceAlong({ radii: s.radii, links: s.links, folds: s.cable?.folds }, g.i, 1, 0, s.r)
+    const sp: Spec = { ...s, path: pts, radii: al.radii, links: al.links, cable: s.cable && { ...s.cable, folds: al.folds } }
+    this.put(restack(this.convert, replace(this.api.getSceneElements(), lineEls(this.convert, sp, styleOf(g.el), g.el)),
+      g.el.id), 'IMMEDIATELY')
+    return true
+  }
+
+  /** Select mode: a press on a line that is not selected edits it (drag a bend or a leg) or, a
+   *  click, selects just it; a selected line is left to Excalidraw (moving it). */
+  private selectDown(e: PointerEvent) {
+    if (!this.active || this.mode !== 'select' || e.button !== 0 || e.altKey || e.ctrlKey || e.metaKey) return
+    if (!(e.target instanceof HTMLCanvasElement)) return
+    const p = this.scene(e), g = this.editGrab(p, e.shiftKey)
+    if (!g || g.kind !== 'point' && g.kind !== 'seg') return
+    if (this.api.getAppState().selectedElementIds?.[g.el.id]) return
+    e.preventDefault(); e.stopImmediatePropagation()
+    this.press = { at: p, grab: g, start: this.api.getSceneElements().slice() }
+    const z = this.zoom()
+    const move = (m: PointerEvent) => {
+      m.stopImmediatePropagation()
+      const pr = this.press, c = this.cursor = this.scene(m)
+      this.mod = m.ctrlKey || m.metaKey
+      if (pr?.grab && (pr.dragging || dist(pr.at, c) * z > DRAG)) {
+        pr.dragging = true
+        this.drag(pr.grab, c, m.shiftKey, 'EVENTUALLY')
+        this.draw()
+      }
+    }
+    const up = (u: PointerEvent) => {
+      u.stopImmediatePropagation()
+      window.removeEventListener('pointermove', move, true)
+      window.removeEventListener('pointerup', up, true)
+      const pr = this.press
+      // the drag's last step still reads the press (refs it lined up with)
+      if (pr?.dragging) this.drag(pr.grab!, this.scene(u), u.shiftKey, 'IMMEDIATELY')
+      else this.select(g.el)
+      this.press = undefined
+      this.guides = []
+      this.draw()
+    }
+    window.addEventListener('pointermove', move, true)
+    window.addEventListener('pointerup', up, true)
   }
 
   /** Alt-click (or the pick button): the clicked line's style (and cable) becomes ligne's. */

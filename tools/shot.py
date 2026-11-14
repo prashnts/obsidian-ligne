@@ -3,7 +3,7 @@
     uv run --project ~/repo/projects --group ui python tools/shot.py [name] [--steps steps.json]
 
 Steps (JSON list): ["key", "m"], ["click", x, y], ["dbl", x, y], ["move", x, y], ["wait", ms],
-["drag", x1, y1, x2, y2], ["eval", "<js>"], ["shot", name] (an extra screenshot mid-way),
+["drag", x1, y1, x2, y2], ["hold" / "release", key], ["eval", "<js>"], ["shot", name] (an extra screenshot mid-way),
 ["save", path] (the scene as an .excalidraw JSON).
 Default steps draw a trunk with a branch off it. Console errors are printed.
 """
@@ -39,6 +39,8 @@ def run(name: str, steps: list) -> None:
         for s in steps:
             match s:
                 case ['key', k]: page.keyboard.press(k)
+                case ['hold', k]: page.keyboard.down(k)
+                case ['release', k]: page.keyboard.up(k)
                 case ['click', x, y]: page.mouse.click(x, y)
                 case ['dbl', x, y]: page.mouse.dblclick(x, y)
                 case ['move', x, y]: page.mouse.move(x, y)
