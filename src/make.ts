@@ -46,7 +46,7 @@ export const DOT: Record<Exclude<Shape, 'net'>, { d: number, w: number, fill: bo
 /** A station at `at` on `line`, grouped with its label: plain or boxed text beside a dot, or a net
  *  flag (KiCad global label) starting at `at` and pointing to `dir` (+1 right, -1 left). */
 export function station(convert: Convert, o: { at: XY, shape: Shape, color: string, text: string,
-  font: Font, line?: string, boxed?: boolean, dir?: 1 | -1 }): any[] {
+  font: Font, line?: string, boxed?: boolean, dir?: 1 | -1, angle?: number, away?: XY, off?: number }): any[] {
   const g = groupId(), data: StationData = { kind: 'station', line: o.line, shape: o.shape }
   const [x, y] = o.at, tag = { groupIds: [g], customData: { ligne: data } }
   if (o.shape === 'net') {
@@ -61,20 +61,30 @@ export function station(convert: Convert, o: { at: XY, shape: Shape, color: stri
   const dot = DOT[o.shape], r = dot.d / 2
   const mark = { type: 'ellipse', x: x - r, y: y - r, width: dot.d, height: dot.d, strokeColor: o.color,
     backgroundColor: dot.fill ? o.color : '#ffffff', fillStyle: 'solid', strokeWidth: dot.w, roughness: 0, ...tag }
-  const label = o.boxed
+  if (o.away) {
+    // beside its line, off the stack's edge, read level, along or across it
+    const lab = label(convert, { type: o.boxed ? 'round' : 'text', at: o.at, angle: o.angle ?? 0, text: o.text, font: o.font,
+      color: o.boxed ? o.color : '#1e1e1e', paper: '#ffffff', line: o.line ?? '-', on: false,
+      off: Math.max(o.off ?? 0, r) + 2, away: o.away })
+    const [m] = make(convert, [mark])
+    return [{ ...m, groupIds: [g] }, ...lab.map(e => ({ ...e, groupIds: [g], customData: undefined }))]
+  }
+  const text = o.boxed
     ? { type: 'rectangle', x: x + dot.d, y: y - dot.d - 36, strokeColor: o.color, backgroundColor: '#ffffff',
       fillStyle: 'solid', strokeWidth: 1, roughness: 0, roundness: { type: 3 }, groupIds: [g],
       label: { text: o.text, ...ink(o.font) } }
     : { type: 'text', x: x + dot.d, y: y - dot.d - o.font.fontSize * 1.25, text: o.text, ...ink(o.font), groupIds: [g] }
-  const els = make(convert, [mark, label])
+  const els = make(convert, [mark, text])
   return els.map(e => ({ ...e, groupIds: [g] }))         // bound text too
 }
 
 /** Label types: plain text (on a line: knocked out), a box, a rounded box, KiCad's net label
  *  (text on the wire) and global label (a flag pointing away); `along`: text repeated along a line,
  *  part of the line (lines.ts). */
-export type LabelType = 'text' | 'box' | 'round' | 'net' | 'flag' | 'along'
-export const LABELS: LabelType[] = ['text', 'box', 'round', 'net', 'flag', 'along']
+export type LabelType = 'text' | 'box' | 'round' | 'net' | 'flag' | 'along' | 'pill'
+export const LABELS: LabelType[] = ['text', 'box', 'round', 'net', 'flag', 'along', 'pill']
+/** How labels read: level, along the line (45° on diagonals, 90° on verticals), across it. */
+export type LabelDir = 'flat' | 'along' | 'across'
 /** Excalidraw font families ligne offers: Cascadia (mono), Liberation Sans, Excalifont (hand). */
 export const FONTS = { mono: 3, sans: 9, hand: 5 } as const
 export const SIZES = [12, 16, 20, 28]
@@ -104,16 +114,19 @@ const centred = (els: any[], m: any, c: XY) => {
  *  `solid`: boxes filled with the colour, the text in the paper colour. Boxes are Excalidraw
  *  containers, so double-click edits the text, and Excalidraw turns and moves them as one. */
 export function label(convert: Convert, o: { type: LabelType, at: XY, angle: number, text: string, font: Font,
-  color: string, paper: string, line?: string, on: boolean, off: number, solid?: boolean, dir?: 1 | -1 }): any[] {
+  color: string, paper: string, line?: string, on: boolean, off: number, solid?: boolean, dir?: 1 | -1, away?: XY }): any[] {
   const g = groupId(), data: LabelData = { kind: 'label', line: o.line, on: o.on, type: o.type }
-  const tag = { groupIds: [g], customData: { ligne: data } }, n: XY = [Math.sin(o.angle), -Math.cos(o.angle)]
-  const fg = o.solid ? o.paper : o.type === 'text' ? o.color : '#1e1e1e'
+  // beside a line it goes off `away` (default: up from its baseline), by its own extent that way
+  const tag = { groupIds: [g], customData: { ligne: data } }, n: XY = o.away ?? [Math.sin(o.angle), -Math.cos(o.angle)]
+  const ext = (w: number, h: number) => Math.abs(n[0] * Math.cos(o.angle) + n[1] * Math.sin(o.angle)) * w / 2
+    + Math.abs(-n[0] * Math.sin(o.angle) + n[1] * Math.cos(o.angle)) * h / 2
+  const fg = o.solid || o.type === 'pill' && o.solid !== false ? o.paper : o.type === 'text' ? o.color : '#1e1e1e'
   const [t] = make(convert, [{ type: 'text', x: 0, y: 0, text: o.text, ...o.font, strokeColor: fg }])
   const lift = (k: number): XY => [o.at[0] + n[0] * k, o.at[1] + n[1] * k]
   let els: any[], c: XY
   if (o.type === 'text' || o.type === 'net') {
     // net: from the point, a hair above the wire
-    const k = o.type === 'net' ? o.off + t.height / 2 + 1 : o.on && o.line ? 0 : o.line ? o.off + t.height / 2 + 2 : 0
+    const k = o.type === 'net' ? o.off + t.height / 2 + 1 : o.on && o.line ? 0 : o.line ? o.off + ext(t.width, t.height) + 2 : 0
     c = lift(k)
     if (o.type === 'net') c = [c[0] + Math.cos(o.angle) * t.width / 2, c[1] + Math.sin(o.angle) * t.width / 2]
     els = [{ ...t, ...tag }]
@@ -136,12 +149,25 @@ export function label(convert: Convert, o: { type: LabelType, at: XY, angle: num
     c = [o.at[0] + dir * (h / 2 + len) / 2, o.at[1]]
     return turned([flag, ...centred([{ ...t, ...tag }], t, c)], o.at, o.angle)
   }
+  if (o.type === 'pill') {
+    // a capsule: round ends, filled with the line colour (outlined when not solid), the text inside
+    const h = t.height + 8, w = t.width + h * .8, r = h / 2, pts: XY[] = []
+    for (const [cx, a0] of [[w / 2 - r, -Math.PI / 2], [-w / 2 + r, Math.PI / 2]] as const)
+      for (let i = 0; i <= 8; i++) { const a = a0 + Math.PI * i / 8; pts.push([cx + Math.cos(a) * r, Math.sin(a) * r]) }
+    pts.push(pts[0])
+    c = o.on || !o.line ? o.at : lift(o.off + ext(w, h) + 2)
+    const fill = o.solid === false ? o.paper : o.color
+    const [pill] = make(convert, [{ type: 'line', x: c[0] + pts[0][0], y: c[1] + pts[0][1],
+      points: pts.map(([px, py]) => [px - pts[0][0], py - pts[0][1]]), strokeColor: o.color, backgroundColor: fill,
+      fillStyle: 'solid', strokeWidth: 1.5, roughness: 0, roundness: null, ...tag }])
+    return turned([pill, ...centred([{ ...t, ...tag, strokeColor: o.solid === false ? o.color : o.paper }], t, c)], c, o.angle)
+  }
   const els2 = make(convert, [{ type: 'rectangle', x: 0, y: 0, strokeColor: o.color,
     backgroundColor: o.solid ? o.color : o.paper, fillStyle: 'solid', strokeWidth: 1.5, roughness: 0,
     roundness: o.type === 'round' ? { type: 3 } : null, ...tag,
     label: { text: o.text, ...o.font, strokeColor: fg } }]).map(e => ({ ...e, ...tag }))
   const box = els2[0]
-  c = o.on || !o.line ? o.at : lift(o.off + box.height / 2 + 2)
+  c = o.on || !o.line ? o.at : lift(o.off + ext(box.width, box.height) + 2)
   return turned(centred(els2, box, c), c, o.angle)
 }
 

@@ -29,13 +29,14 @@ import { needs } from './core/lead.ts'
 import { METRO, SIGNALS, SIGNAL_NAMES, netColor, ownColors } from './core/palette.ts'
 import { graph, toText, type Cap, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
+import { clear, edgeOut, type Box } from './core/place.ts'
 import { laneAt, type Track } from './core/snap.ts'
 import { PARTS, PART_NAMES, clicks, board, holeAt, part, pinsAt, pinsOf, pitchOf, seat, span,
   type PartKind } from './board.ts'
 import { EXTRAS, bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, layered, lidOf, lineEls, pathOf, radiiOf, relink, replace,
   onLanes, resized, restack, specOf, stale, type Spec } from './lines.ts'
 import { DOT, FONTS, LABELS, PAPER, SIZES, bump, fromState, groupId, label, legend, paper, station, styleOf, toState,
-  turned, type Convert, type Font, type LabelType, type Style } from './make.ts'
+  turned, type Convert, type Font, type LabelDir, type LabelType, type Style } from './make.ts'
 import { Panel, type Btn, type Item, type Menu } from './ui.ts'
 
 export type { Convert }
@@ -108,7 +109,8 @@ const HELP: [string, string][] = [
   ['ends popover', 'each end: bar, open dot, disc · casing: paper-coloured band under the line, gaps at crossings'],
   ['style', "Excalidraw's panel: colour, width, dash, arrowheads"],
   ['S · 1–4 · B', 'stations: stop, interchange, commit, net flag · labels in a box'],
-  ['T · 1–6 · B · F', 'labels: text, box, rounded, net label, flag, along the line · on a line / beside it · solid'],
+  ['T · 1–7 · B · F', 'labels: text, box, rounded, net label, flag, along the line, pill · on a line / beside it · solid'],
+  ['beside a line', 'labels and station names: pointer\'s side, off the stack\'s edge, clear of others · level / along / across'],
   ['X · 1–9, 0', 'perfboard (drag its size), R, C, diode, LED, pin header, socket, DIP, TO-92, module: click holes'],
   ['R / ⇧R', 'select mode: turn the selection 90° / 45° (parts about pin 1)'],
   ['K', 'legend (again: rebuild)'], ['P / ⇧P · O', 'A5 / A6 sheet · landscape'],
@@ -171,6 +173,7 @@ export class Ligne {
   spread = 0                                       // lane gap beyond touching
   gridMode: GridMode = 'off'
   labelType: LabelType = 'text'
+  labelDir: LabelDir = 'along'                     // labels and station names: level, along the line, across it
   solid = false                                    // labels: filled with the colour
   font: keyof typeof FONTS = 'mono'
   size = 16
@@ -1326,9 +1329,9 @@ export class Ligne {
 
   private save() {
     const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, ends, casing, byNet,
-      nextColor, jointKind } = this
+      nextColor, jointKind, labelDir } = this
     localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
-      scale, ends, casing, byNet, nextColor, jointKind }))
+      scale, ends, casing, byNet, nextColor, jointKind, labelDir }))
   }
 
   private undoStop() {
@@ -1532,12 +1535,55 @@ export class Ligne {
   private station(p: XY) {
     const hit = this.snapLine(p), n = this.graph().stations.length + 1
     const tip = hit?.end === 'end' ? hit.path.slice(-2) : hit?.end === 'start' ? hit.path.slice(0, 2).reverse() : []
-    this.add(station(this.convert, {
+    // on a line's body: the name beside it, on the side of the pointer, off the stack's edge
+    const side = hit?.el && !hit.end && this.shape !== 'net' ? this.beside(hit.el, p) : undefined
+    const els = station(this.convert, {
       at: hit?.q ?? p, shape: this.shape, line: hit?.el && lidOf(hit.el), boxed: this.boxed,
       font: this.labelFont(),
       color: hit?.el?.strokeColor ?? this.api.getAppState().currentItemStrokeColor,
       text: this.shape === 'net' ? `NET${n}` : `S${n}`, dir: tip.length && tip[1][0] < tip[0][0] ? -1 : 1,
-    }))
+      ...(side ? { angle: side.angle, away: side.away, off: side.off } : {}),
+    })
+    this.add(side ? this.unclutter(els, side.u, side.away, els.slice(1)) : els)
+  }
+
+  /** Where a label beside line el goes for pointer p: the leg's direction there, the side of the
+   *  pointer (else above, or right of a vertical), how far out the stack's edge is, the angle it reads at. */
+  private beside(el: any, p: XY) {
+    const drawn = centre(el), m = nearest(drawn, p), a = drawn[m.i], b = drawn[m.i + 1] ?? a
+    const u = unit([b[0] - a[0], b[1] - a[1]]), nl: XY = [-u[1], u[0]]
+    const s = (p[0] - m.q[0]) * nl[0] + (p[1] - m.q[1]) * nl[1]
+    const def = Math.abs(nl[1]) > 1e-6 ? (nl[1] < 0 ? 1 : -1) : (nl[0] > 0 ? 1 : -1)
+    const k = Math.abs(s) > 1 ? Math.sign(s) : def, away: XY = [nl[0] * k, nl[1] * k]
+    const off = edgeOut(this.lines(), m.q, away, bodyWidth(el) / 2)
+    const angle = this.labelDir === 'flat' ? 0 : upright(this.labelDir === 'across' ? nl : u)
+    return { q: m.q, u, away, off, angle }
+  }
+
+  /** els (a label, or a station and its label: `body` the part to keep clear) moved along u, or
+   *  further out along n, off the labels and texts already drawn. */
+  private unclutter(els: any[], u: XY, n: XY, body = els): any[] {
+    const boxOf = (e: any): Box => ({ c: [e.x + e.width / 2, e.y + e.height / 2], w: e.width, h: e.height, a: e.angle ?? 0 })
+    const big = body.filter(e => e.type !== 'text' || !e.containerId).sort((a, b) => b.width * b.height - a.width * a.height)[0]
+    if (!big) return els
+    const mine = new Set(els.map(e => e.id))
+    const taken = this.live().filter(e => !mine.has(e.id) && (e.type === 'text' && !e.containerId
+      || e.customData?.ligne?.kind === 'label' && e.type !== 'text')).map(boxOf)
+    const b = boxOf(big), to = clear(b, taken, u, n), d: XY = [to.c[0] - b.c[0], to.c[1] - b.c[1]]
+    if (!d[0] && !d[1]) return els
+    const move = new Set(body.map(e => e.id))
+    return els.map(e => move.has(e.id) ? { ...e, x: e.x + d[0], y: e.y + d[1] } : e)
+  }
+
+  /** The line nearest p within reach (beside it, not only on it). */
+  private lineNear(p: XY, reach = 40): Ln | undefined {
+    const tol = reach / this.zoom()
+    let best: Ln | undefined, bd = Infinity
+    for (const l of this.lines()) {
+      const d = nearest(l.drawn, p).d - l.width / 2
+      if (d < tol && d < bd) { best = l; bd = d }
+    }
+    return best
   }
 
   /** A label at p, of the type picked: on the line there (along it), else where clicked; a flag at a
@@ -1546,22 +1592,30 @@ export class Ligne {
     const s = this.api.getAppState(), l = this.lineAt(p)
     if (this.labelType === 'along') return l && this.alongText(l.el, p)
     const end = this.labelType === 'flag' ? this.snapLine(p) : undefined
+    // beside lines: a line within reach, the label on the pointer's side off its stack's edge
+    const by = !this.onLine && this.labelType !== 'net' && !end?.end ? this.lineNear(p) : undefined
+    const sd = by && this.beside(by.el, p)
     let at = this.placed(p).q, angle = 0, dir: 1 | -1 = 1
     if (end?.end && end.el) {
       const [a, b] = end.end === 'end' ? end.path.slice(-2) : end.path.slice(0, 2).reverse(), v = unit([b[0] - a[0], b[1] - a[1]])
       at = b; angle = upright(v); dir = Math.cos(angle) * v[0] + Math.sin(angle) * v[1] > 0 ? 1 : -1
+    } else if (sd) {
+      at = sd.q; angle = sd.angle
     } else if (l) {
-      const n = nearest(l.drawn, p), a = l.drawn[n.i], b = l.drawn[n.i + 1] ?? a
-      at = n.q; angle = upright(unit([b[0] - a[0], b[1] - a[1]]))
+      const n = nearest(l.drawn, p), a = l.drawn[n.i], b = l.drawn[n.i + 1] ?? a, u = unit([b[0] - a[0], b[1] - a[1]])
+      at = n.q; angle = this.labelType === 'net' || this.labelDir === 'along' ? upright(u)
+        : this.labelDir === 'across' ? upright([-u[1], u[0]]) : 0
     }
-    const line = end?.el ?? l?.el
+    const line = end?.el ?? (sd ? by!.el : l?.el)
     this.ask(at, text => {
       // a net name on a line colours it by its use (power, ground, data, clock, …)
-      const by = this.byNet && line && (this.labelType === 'net' || this.labelType === 'flag') ? netColor(text) : undefined
-      this.add(label(this.convert, { type: this.labelType, at, angle, text, font: this.labelFont(),
-        color: by ?? line?.strokeColor ?? s.currentItemStrokeColor, paper: s.viewBackgroundColor ?? '#ffffff',
-        line: line && lidOf(line), on: this.onLine, off: line ? bodyWidth(line) / 2 : 0, solid: this.solid, dir }))
-      if (by && by !== line.strokeColor) this.recolor([line.id], by)
+      const net = this.byNet && line && (this.labelType === 'net' || this.labelType === 'flag') ? netColor(text) : undefined
+      const els = label(this.convert, { type: this.labelType, at, angle, text, font: this.labelFont(),
+        color: net ?? line?.strokeColor ?? s.currentItemStrokeColor, paper: s.viewBackgroundColor ?? '#ffffff',
+        line: line && lidOf(line), on: this.onLine && !sd, off: sd ? sd.off : line ? bodyWidth(line) / 2 : 0,
+        solid: this.labelType === 'pill' ? !this.solid : this.solid, dir, away: sd?.away })
+      this.add(sd ? this.unclutter(els, sd.u, sd.away) : els)
+      if (net && net !== line.strokeColor) this.recolor([line.id], net)
     })
   }
 
@@ -1911,6 +1965,9 @@ export class Ligne {
         { label: 'Copy', items: [{ icon: 'svg', text: 'SVG', title: 'Copy the selection (else all) as SVG', key: '⇧C',
           click: A.C }, { icon: 'copy', text: 'graph', title: 'Copy the graph as text: lines, stations, labels',
           click: () => this.copy() }] }] }
+    const dirs: Btn[] = (['flat', 'along', 'across'] as const).map(d => ({ icon: 'dir-' + d, on: this.labelDir === d,
+      title: { flat: 'Labels read level', along: 'Labels read along the line (45° on diagonals, 90° on verticals)',
+        across: 'Labels read across the line' }[d], click: () => { this.labelDir = d; this.save(); this.panelUI() } }))
     const grid: Btn = { icon: this.gridMode === 'iso' ? 'iso' : 'grid', key: 'G', on: this.gridMode !== 'off',
       title: `Grid: ${this.gridMode} (off, square, isometric)`, click: A.g }
     const items: Item[] = [
@@ -1946,18 +2003,20 @@ export class Ligne {
         ...Object.entries(SHAPES).map(([k, v]) => ({ icon: v, title: v[0].toUpperCase() + v.slice(1), key: k,
           on: this.shape === v, click: () => { this.shape = v; this.panelUI() } })),
         { icon: 'boxed', title: 'Labels in a box', key: 'B', on: this.boxed, click: A.b },
+        'sep' as const, ...dirs,
       ] : mode === 'label' ? [
         ...LABELS.map((t, i) => ({ icon: { text: 'text', box: 'box', round: 'rounded', net: 'netlabel', flag: 'flag',
-          along: 'linetext' }[t],
+          along: 'linetext', pill: 'pill' }[t],
           title: { text: 'Text', box: 'Box', round: 'Rounded box', net: 'Net label (KiCad local): on the wire',
             flag: 'Flag (KiCad global label): at a line end, pointing away',
-            along: 'Along the line: click a line, its text repeats along it (empty: none)' }[t], key: String(i + 1),
+            along: 'Along the line: click a line, its text repeats along it (empty: none)',
+            pill: 'Pill: a capsule in the line colour (F: outlined)' }[t], key: String(i + 1),
           on: this.labelType === t, click: () => { this.digit(i + 1); this.panelUI() } })),
         'sep' as const,
         { icon: 'boxed', title: this.onLine ? 'On the line (click: beside it)' : 'Beside the line (click: on it)',
           key: 'B', on: this.onLine, click: A.b },
         { icon: 'solid', title: 'Solid: filled with the line colour', key: 'F', on: this.solid, click: A.f },
-        font, grid,
+        ...dirs, font, grid,
       ] : mode === 'board' ? [
         ...PARTS.map((k, i) => ({ icon: k, title: PART_NAMES[k][0].toUpperCase() + PART_NAMES[k].slice(1),
           key: String((i + 1) % 10),
