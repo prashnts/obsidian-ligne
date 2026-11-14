@@ -54,7 +54,8 @@ back (shown as you draw; still too short: dashed red). At a flat cable's end, cl
 of them, or ⇧-click: the cable itself). Drag a wire to fan it out; click a fanned wire: a plain line
 goes on from it. Click a cable's body to branch off it. By the pointer, a hint says what a click does.
 Text along a line, repeated (knocked out of thin lines, inside thick ones): label tool *along* (`⇧T`). `d` direction
-chevrons, `a` arrowheads.
+chevrons, `a` arrowheads. Ends popover: each end plain, a bar (terminus), an open dot or a disc; casing:
+a band of the paper colour under the line, so a line crossing on top shows a gap.
 
 `s` stations (`1-4` stop/interchange/commit/net flag, `b` boxed label), following their line's colour.
 `t` labels: `1-6` text, box, rounded box, net label (KiCad local: on the wire), flag (KiCad global: at a

@@ -17,8 +17,10 @@ export interface LineData {
   kind: 'line' | 'zone', lid?: string, path: XY[], r: number, radii?: number[], links?: (Link | null)[],
   from?: string, to?: string, cable?: Cable, twist?: boolean, ticks?: boolean, arrow?: boolean,
   own?: string, stack?: string, np?: number, box?: [number, number, number, number], text?: LineText,
-  grid?: 'octi' | 'iso',
+  grid?: 'octi' | 'iso', ends?: { start?: Cap, end?: Cap }, casing?: number, paper?: string,
 }
+/** A line's end: a bar across (terminus), an open dot, a filled disc. */
+export type Cap = 'none' | 'bar' | 'dot' | 'disc'
 /** Text repeated along a line, set on it: font family and size, the paper colour knocked out. */
 export interface LineText { text: string, font: number, size: number, paper: string }
 /** customData.ligne of a station dot; its label is the text element in the same group. */

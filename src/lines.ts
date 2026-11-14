@@ -5,7 +5,7 @@
 import { bandLine, cable, cableWidth, chevronBand, chevrons, type Cable, type Piece } from './core/cable.ts'
 import { flat, isFlat } from './core/flat.ts'
 import { jacket } from './core/jacket.ts'
-import { carry, concentric, dist, offsetAt, round, unit, upright, type XY } from './core/geom.ts'
+import { carry, concentric, dist, offsetAt, pointAt, round, unit, upright, type XY } from './core/geom.ts'
 import type { LineData } from './core/graph.ts'
 import type { Body } from './core/snap.ts'
 import { bump, groupId, make, shortId, styleOf, turned, type Convert, type Style } from './make.ts'
@@ -85,7 +85,8 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
     : c.style === 'jacket' ? jacket(path, radii, c, st.strokeColor)
     : c.style === 'chevron' ? [{ pts: chevronBand(bandLine(path, radii, c.pitch), c.pitch), color: 0, fill: true, width: 1 }]
     : cable(drawn, c, w).pieces
-  const own = pieces.length > 1 || spec.ticks || spec.text ? spec.own ?? groupId() : undefined
+  const own = pieces.length > 1 || spec.ticks || spec.text || spec.casing || spec.ends?.start && spec.ends.start !== 'none'
+    || spec.ends?.end && spec.ends.end !== 'none' ? spec.own ?? groupId() : undefined
   const groupIds = [...(own ? [own] : []),
     ...(base?.groupIds ?? []).filter((g: string) => g !== spec.own && g !== spec.stack),
     ...(spec.stack ? [spec.stack] : [])]
@@ -125,6 +126,26 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
         strokeWidth: thick ? Math.max(1, bw / 4) : 1.5, strokeStyle: 'solid' }, 'tick'))
   }
   const bw = c ? cableWidth(c, w) : w
+  // a band of the paper colour under the line: where lines cross, the one on top shows a gap
+  const paper = spec.paper ?? '#ffffff', body = c && c.style !== 'round' && c.style !== 'zigzag' && c.style !== 'checks'
+    ? bandLine(path, radii, bw) : drawn
+  if (spec.casing && kind === 'line') extras.push(extra(body, { strokeColor: paper, strokeWidth: bw + 2 * spec.casing,
+    strokeStyle: 'solid', roughness: 0, opacity: 100 }, 'case'))
+  if (kind === 'line') for (const end of ['start', 'end'] as const) {
+    const cap = spec.ends?.[end]
+    if (!cap || cap === 'none') continue
+    const { p, u } = pointAt(body, end === 'start' ? 0 : Infinity), n: XY = [-u[1], u[0]]
+    if (cap === 'bar') {
+      const h = Math.max(bw * 2, 8)
+      extras.push(extra([[p[0] + n[0] * h, p[1] + n[1] * h], [p[0] - n[0] * h, p[1] - n[1] * h]],
+        { strokeColor: st.strokeColor, strokeWidth: Math.max(2, w), strokeStyle: 'solid' }, 'cap'))
+    } else {
+      const d = Math.max(bw * 2.2, 10)
+      extras.push({ type: 'ellipse', x: p[0] - d / 2, y: p[1] - d / 2, width: d, height: d, strokeColor: st.strokeColor,
+        backgroundColor: cap === 'disc' ? st.strokeColor : paper, fillStyle: 'solid', strokeWidth: Math.max(1.5, w * .6),
+        strokeStyle: 'solid', roughness: 0, opacity: st.opacity, groupIds, customData: { ligne: { kind: 'cap', of: main.id } } })
+    }
+  }
   return [main, ...convert(extras), ...(spec.text ? lineText(convert, path, radii, bw, spec.text, st.strokeColor,
     main.id, groupIds) : [])]
 }
@@ -153,10 +174,16 @@ function lineText(convert: Convert, path: XY[], radii: number[], bw: number, t: 
   return out
 }
 
+/** Kinds of the elements drawn with a line: cable strands, chevrons, repeated text, casing, ends. */
+export const EXTRAS = ['strand', 'tick', 'rep', 'case', 'cap']
+/** A line's elements in drawing order: its casing under it. */
+export const layered = (els: any[]) => [...els.filter(e => e.customData?.ligne?.kind === 'case'),
+  ...els.filter(e => e.customData?.ligne?.kind !== 'case')]
+
 /** Whether e is an extra drawn with line `main`: in its own group (or, before that, by id). */
 function extraOf(e: any, main: any) {
   const k = e.customData?.ligne?.kind
-  if (e.isDeleted || (k !== 'strand' && k !== 'tick' && k !== 'rep')) return false
+  if (e.isDeleted || !EXTRAS.includes(k)) return false
   const own = dataOf(main)?.own && main.groupIds?.[0]
   return own ? e.groupIds?.[0] === own : e.customData.ligne.of === main.id
 }
@@ -164,7 +191,7 @@ function extraOf(e: any, main: any) {
 /** scene with the line els[0] (same id) and its extras swapped in, old extras deleted. */
 export function replace(scene: readonly any[], els: any[]): any[] {
   const [main, ...extras] = els, old = scene.find(e => e.id === main.id)
-  return scene.flatMap(e => e.id === main.id ? [main, ...extras]
+  return scene.flatMap(e => e.id === main.id ? layered([main, ...extras])
     : old && extraOf(e, old) ? [bump(e, { isDeleted: true })] : [e])
 }
 

@@ -24,12 +24,12 @@ import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, oc
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
 import { dropBend, jog, legNormal, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
 import { needs } from './core/lead.ts'
-import { graph, toText, type Link, type Shape } from './core/graph.ts'
+import { graph, toText, type Cap, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { laneAt, type Track } from './core/snap.ts'
 import { PARTS, PART_NAMES, clicks, board, holeAt, part, pinsAt, pinsOf, pitchOf, seat, span,
   type PartKind } from './board.ts'
-import { bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, lidOf, lineEls, pathOf, radiiOf, relink, replace,
+import { EXTRAS, bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, layered, lidOf, lineEls, pathOf, radiiOf, relink, replace,
   onLanes, resized, restack, specOf, stale, type Spec } from './lines.ts'
 import { DOT, FONTS, LABELS, PAPER, SIZES, bump, fromState, groupId, label, legend, paper, station, styleOf, toState,
   turned, type Convert, type Font, type LabelType, type Style } from './make.ts'
@@ -99,6 +99,7 @@ const HELP: [string, string][] = [
   ['', 'drag a wire: fan it out · click a fanned wire: a plain line goes on from it'],
   ['⇧T', 'the label tool, "along": click a line, its text repeats along it'],
   ['A / D', 'arrowheads · direction chevrons (the way it was drawn)'],
+  ['ends popover', 'each end: bar, open dot, disc · casing: paper-coloured band under the line, gaps at crossings'],
   ['style', "Excalidraw's panel: colour, width, dash, arrowheads"],
   ['S · 1–4 · B', 'stations: stop, interchange, commit, net flag · labels in a box'],
   ['T · 1–6 · B · F', 'labels: text, box, rounded, net label, flag, along the line · on a line / beside it · solid'],
@@ -146,6 +147,8 @@ export class Ligne {
   arrow = false
   ticks = false
   twist = false                                    // cable
+  ends: { start: Cap, end: Cap } = { start: 'none', end: 'none' }
+  casing = 0                                       // px of paper colour either side, under the line
   cable: Cable = { style: 'checks', n: 2, pitch: 16 }
   free = false                                     // sticky Shift
   snap = true                                      // onto lines and lanes; Ctrl/Cmd held: off
@@ -1013,6 +1016,8 @@ export class Ligne {
     this.twist = !!c
     if (c) { const { legs, folds, pick, ...rest } = c; this.cable = rest }
     this.ticks = !!d.ticks
+    this.ends = { start: d.ends?.start ?? 'none', end: d.ends?.end ?? 'none' }
+    this.casing = d.casing ?? 0
     if (this.arrow !== !!d.arrow) { this.arrow = !!d.arrow; this.api.setActiveTool({ type: this.held() }) }
   }
 
@@ -1251,9 +1256,9 @@ export class Ligne {
   }
 
   private save() {
-    const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale } = this
+    const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, ends, casing } = this
     localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
-      scale }))
+      scale, ends, casing }))
   }
 
   private undoStop() {
@@ -1391,7 +1396,7 @@ export class Ligne {
    *  ligne's lines stay (their waypoints would no longer describe them). */
   private rotate(a: number) {
     const s = this.api.getAppState(), ids = new Set(Object.keys(s.selectedElementIds ?? {}))
-    const els = this.live(), drawn = new Set(['line', 'zone', 'strand', 'tick', 'rep'])
+    const els = this.live(), drawn = new Set(['line', 'zone', ...EXTRAS])
     const pick = els.filter(e => (ids.has(e.id) || ids.has(e.containerId)) && !drawn.has(e.customData?.ligne?.kind))
     if (!pick.length) return
     const groups = new Map<string, any[]>()
@@ -1565,7 +1570,7 @@ export class Ligne {
     const spec: Spec = { kind: closed ? 'zone' : 'line', lid: d?.lid, path: pts, radii: meta.map(m => m.r),
       links: meta.map(m => m.link), r: this.r, from: this.from, to: endHit ? lidOf(endHit.el) : d?.to, stack,
       cable: this.twist ? this.made(meta, d?.cable) : undefined, ticks: this.ticks, arrow: this.arrow, own: d?.own,
-      grid: this.gridDirs() === 'iso' ? 'iso' : undefined, text: d?.text }
+      grid: this.gridDirs() === 'iso' ? 'iso' : undefined, text: d?.text, ...this.endsSpec() }
     const els = lineEls(this.convert, spec, fromState(this.api.getAppState()), base)
     if (base) {
       const shift = ed.reversed ? pts.length - ed.n : 0
@@ -1581,7 +1586,7 @@ export class Ligne {
         return a0 <= x1 && a1 >= x0 && b0 <= y1 && b1 >= y0
       })
       scene = k < 0 ? [...scene, ...els] : [...scene.slice(0, k), ...els, ...scene.slice(k)]
-    } else scene = [...scene, ...els]
+    } else scene = [...scene, ...layered(els)]
     const sp = this.split, parent = sp && scene.find(e => e.id === sp.el.id), pc = parent && cableOf(parent)
     if (sp && pc?.conn?.[sp.end] && pc.conn[sp.end] !== 'none') {
       // a split end has no connector of its own
@@ -1591,6 +1596,24 @@ export class Ligne {
     }
     this.put(scene, 'IMMEDIATELY')
     this.reset()
+  }
+
+  /** A finished line's ends and casing, from ligne's settings (the paper colour for both). */
+  private endsSpec() {
+    const none = this.ends.start === 'none' && this.ends.end === 'none'
+    return { ends: none ? undefined : { ...this.ends }, casing: this.casing || undefined,
+      paper: none && !this.casing ? undefined : this.api.getAppState().viewBackgroundColor ?? '#ffffff' }
+  }
+
+  /** Line ends or casing changed: for the line being drawn (on finish), else for the selected lines. */
+  private finishing(patch: { ends?: { start: Cap, end: Cap }, casing?: number }, capture = 'IMMEDIATELY', ui = true) {
+    Object.assign(this, patch)
+    this.applySel(s => {
+      if (s.kind !== 'line') return
+      Object.assign(s, this.endsSpec())
+    }, capture)
+    this.save()
+    if (ui) this.panelUI()
   }
 
   /** The cable of a line being finished: ligne's settings; an extended line keeps its legs and
@@ -1714,6 +1737,16 @@ export class Ligne {
       { label: 'Draw', items: [
         { icon: 'fold', text: 'fold', title: 'Fold at the next corner: the cable turns over', key: 'B', on: this.flip,
           click: A.b }] })
+    const capNames: Record<Cap, string> = { none: 'none', bar: 'bar', dot: 'open dot', disc: 'disc' }
+    const endRow = (end: 'start' | 'end') => opt(`${end === 'start' ? 'Start' : 'End'}`, ['none', 'bar', 'dot', 'disc'] as Cap[],
+      this.ends[end], v => this.finishing({ ends: { ...this.ends, [end]: v } }), v => capNames[v],
+      v => ({ icon: v === 'none' ? 'line' : 'cap-' + v, text: undefined }))
+    const ends: Menu = { icon: 'cap-bar', title: 'Line ends (bar, open dot, disc) and casing', open: this.menu === 'ends',
+      on: this.ends.start !== 'none' || this.ends.end !== 'none' || this.casing > 0, click: () => this.openMenu('ends'),
+      rows: [{ label: 'For', items: [target.cloneNode(true) as HTMLElement] }, { label: 'Start', items: endRow('start') },
+        { label: 'End', items: endRow('end') },
+        { label: 'Casing', items: [this.range('Casing: a band of the paper colour either side, under the line (gaps where lines cross)',
+          0, 8, this.casing, (v, cap) => this.finishing({ casing: v }, cap, false))] }] }
     const cable: Menu = { icon: this.twist ? c.style : 'twist', title: 'Line body: plain, cable, chevron band', key: 'W',
       on: this.twist, open: this.menu === 'cable', rows, click: () => this.openMenu('cable') }
     const font: Menu = { icon: 'font', title: 'Label font and size', open: this.menu === 'font',
@@ -1753,7 +1786,7 @@ export class Ligne {
         'sep' as const,
         { icon: 'arrow', title: 'Arrowheads (Excalidraw\'s arrow style)', key: 'A', on: this.arrow, click: A.a },
         { icon: 'ticks', title: 'Direction chevrons, the way the line was drawn', key: 'D', on: this.ticks, click: A.d },
-        cable,
+        cable, ends,
         { icon: 'linetext', title: 'Text along a line, repeated: the label tool\'s "along"', key: '⇧T', click: A.T },
         'sep' as const,
         { icon: 'finish', title: 'End the line', key: '⏎', click: A.Enter },
@@ -1783,7 +1816,7 @@ export class Ligne {
         ...opt('Perfboard: 2.54 mm true size ×', [1, 2, 4], this.scale, v => { this.scale = v; this.save(); this.panelUI() },
           v => `×${v}`),
         font,
-      ] : [cable, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
+      ] : [cable, ends, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
         { icon: 'gap', title: 'Move the selected lines out on their lanes (- in)', key: '=', click: A['='] }]),
       { icon: 'pick', title: 'Take a line\'s style (or Alt-click)', key: 'I', on: this.picking, click: A.i },
       'sep', sheets,
