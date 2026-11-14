@@ -54,7 +54,11 @@ back (shown as you draw; still too short: dashed red). At a flat cable's end, cl
 of them, or ⇧-click: the cable itself). Drag a wire to fan it out; click a fanned wire: a plain line
 goes on from it. Click a cable's body to branch off it. By the pointer, a hint says what a click does.
 Text along a line, repeated (knocked out of thin lines, inside thick ones): label tool *along* (`⇧T`). `d` direction
-chevrons, `a` arrowheads. Ends popover: each end plain, a bar (terminus), an open dot or a disc; casing:
+chevrons, `a` arrowheads. Colours popover: eight metro colours, and signal colours by use (power, ground, data in light navy,
+clock in mid-light green, analog, control, RF); *by net*: a net label or flag on a line colours it by
+its name (SDA, MOSI, TX: data; SCL, SCK: clock; GND; 3V3, VBUS; CS, RST; A0; ANT); *next*: each new line
+takes the next metro colour. Ribbons and jackets have an *own* wire set: each wire a signal colour (Qwiic
+order to start), clicked through in the popover. Ends popover: each end plain, a bar (terminus), an open dot or a disc; casing:
 a band of the paper colour under the line, so a line crossing on top shows a gap.
 
 `s` stations (`1-4` stop/interchange/commit/net flag, `b` boxed label), following their line's colour.

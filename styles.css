@@ -49,6 +49,7 @@
 .ligne-pop button.ligne-btn b { font-weight: 500; }
 .ligne-btn .sw { display: flex; height: 14px; border-radius: 2px; overflow: hidden; outline: 1px solid #0002; }
 .ligne-btn .sw i { width: 3px; }
+.ligne-btn .sw i:only-child { width: 14px; }
 .ligne-btn b { color: inherit; }
 .ligne-hint { font: 500 12px var(--ui-font, system-ui); fill: #1864ab; stroke: #fff; stroke-width: 4px; paint-order: stroke;
   stroke-linejoin: round; pointer-events: none; }

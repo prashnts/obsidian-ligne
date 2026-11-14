@@ -5,6 +5,7 @@
 // Ends fan out into legs (ribbon) or end in a connector housing; Excalidraw-free pieces as cable.ts.
 import { dist, lengths, normals, octi, resample, round, unit, type XY } from './geom.ts'
 import type { Cable, Piece } from './cable.ts'
+import { ownColors } from './palette.ts'
 
 export const MM = 96 / 25.4                               // px per mm at Excalidraw's 96 dpi
 /** Silicone wire outer diameter in mm by AWG, representative (ribbon pitch = diameter). */
@@ -12,11 +13,11 @@ export const AWG: Record<number, number> = { 32: 0.7, 30: 0.9, 28: 1.1, 26: 1.4 
 export const GAUGES = [32, 30, 28, 26]
 export const FFC_PITCH = [0.5, 1]
 
-export type WireSet = 'mono' | 'qwiic' | 'grove' | 'rainbow' | 'usb'
-export const SETS: WireSet[] = ['mono', 'qwiic', 'grove', 'rainbow', 'usb']
+export type WireSet = 'mono' | 'qwiic' | 'grove' | 'rainbow' | 'usb' | 'own'
+export const SETS: WireSet[] = ['mono', 'qwiic', 'grove', 'rainbow', 'usb', 'own']
 /** Pin 1 first: Qwiic GND 3V3 SDA SCL, Grove SCL SDA VCC GND, rainbow ribbon brown to black, USB VBUS
  *  D- D+ GND. */
-const COLORS: Record<Exclude<WireSet, 'mono'>, string[]> = {
+const COLORS: Record<Exclude<WireSet, 'mono' | 'own'>, string[]> = {
   qwiic: ['#1e1e1e', '#e03131', '#1c7ed6', '#fab005'],
   usb: ['#e03131', '#f1f3f5', '#2f9e44', '#1e1e1e'],
   grove: ['#fab005', '#f1f3f5', '#e03131', '#1e1e1e'],
@@ -24,8 +25,9 @@ const COLORS: Record<Exclude<WireSet, 'mono'>, string[]> = {
     '#1e1e1e'],
 }
 
-/** Wire colours of a set, for a sample (mono: the line colour, striped). */
-export const swatch = (set: WireSet, base: string) => set === 'mono' ? [base, '#ffffff', base, base] : COLORS[set]
+/** Wire colours of a set, for a sample (mono: the line colour, striped; own: the cable's `colors`). */
+export const swatch = (set: WireSet, base: string, own?: string[]) => set === 'mono' ? [base, '#ffffff', base, base]
+  : set === 'own' ? (own?.length ? own : [base]) : COLORS[set]
 
 /** Cable ends: wire housings (Dupont female / male, JST PH, SH, MX), an FFC's ZIF, a jacket's
  *  stripped end or its plugs (jacket.ts). */
@@ -72,6 +74,7 @@ export function sides(c: Cable, legs: number): number[] {
 export function wire(c: Cable, j: number, base: string): { color: string, stripe: boolean } {
   const k = c.pick?.[j] ?? j, set = c.set ?? 'mono'
   if (set === 'mono') return { color: base, stripe: k === 0 }
+  if (set === 'own') return { color: ownColors(k + 1, c.colors)[k], stripe: false }
   const cs = COLORS[set]
   return { color: cs[k % cs.length], stripe: false }
 }

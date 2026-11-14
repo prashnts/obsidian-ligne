@@ -24,6 +24,7 @@ import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, oc
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
 import { dropBend, jog, legNormal, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
 import { needs } from './core/lead.ts'
+import { METRO, SIGNALS, SIGNAL_NAMES, netColor, ownColors } from './core/palette.ts'
 import { graph, toText, type Cap, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { laneAt, type Track } from './core/snap.ts'
@@ -99,6 +100,7 @@ const HELP: [string, string][] = [
   ['', 'drag a wire: fan it out · click a fanned wire: a plain line goes on from it'],
   ['⇧T', 'the label tool, "along": click a line, its text repeats along it'],
   ['A / D', 'arrowheads · direction chevrons (the way it was drawn)'],
+  ['colours popover', 'metro and signal colours (selected lines take them) · by net name · next colour per line'],
   ['ends popover', 'each end: bar, open dot, disc · casing: paper-coloured band under the line, gaps at crossings'],
   ['style', "Excalidraw's panel: colour, width, dash, arrowheads"],
   ['S · 1–4 · B', 'stations: stop, interchange, commit, net flag · labels in a box'],
@@ -149,6 +151,8 @@ export class Ligne {
   twist = false                                    // cable
   ends: { start: Cap, end: Cap } = { start: 'none', end: 'none' }
   casing = 0                                       // px of paper colour either side, under the line
+  byNet = true                                     // a net label or flag on a line colours it by its name
+  nextColor = false                                // each new line takes the next metro colour
   cable: Cable = { style: 'checks', n: 2, pitch: 16 }
   free = false                                     // sticky Shift
   snap = true                                      // onto lines and lanes; Ctrl/Cmd held: off
@@ -1256,9 +1260,10 @@ export class Ligne {
   }
 
   private save() {
-    const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, ends, casing } = this
+    const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, ends, casing, byNet,
+      nextColor } = this
     localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
-      scale, ends, casing }))
+      scale, ends, casing, byNet, nextColor }))
   }
 
   private undoStop() {
@@ -1484,9 +1489,14 @@ export class Ligne {
       at = n.q; angle = upright(unit([b[0] - a[0], b[1] - a[1]]))
     }
     const line = end?.el ?? l?.el
-    this.ask(at, text => this.add(label(this.convert, { type: this.labelType, at, angle, text, font: this.labelFont(),
-      color: line?.strokeColor ?? s.currentItemStrokeColor, paper: s.viewBackgroundColor ?? '#ffffff',
-      line: line && lidOf(line), on: this.onLine, off: line ? bodyWidth(line) / 2 : 0, solid: this.solid, dir })))
+    this.ask(at, text => {
+      // a net name on a line colours it by its use (power, ground, data, clock, …)
+      const by = this.byNet && line && (this.labelType === 'net' || this.labelType === 'flag') ? netColor(text) : undefined
+      this.add(label(this.convert, { type: this.labelType, at, angle, text, font: this.labelFont(),
+        color: by ?? line?.strokeColor ?? s.currentItemStrokeColor, paper: s.viewBackgroundColor ?? '#ffffff',
+        line: line && lidOf(line), on: this.onLine, off: line ? bodyWidth(line) / 2 : 0, solid: this.solid, dir }))
+      if (by && by !== line.strokeColor) this.recolor([line.id], by)
+    })
   }
 
   /** Perfboard mode: a board dragged out from p to `to` (a click: 30 x 20 holes), at the back; or a
@@ -1595,7 +1605,26 @@ export class Ligne {
       scene = replace(scene, lineEls(this.convert, s, styleOf(parent), parent))
     }
     this.put(scene, 'IMMEDIATELY')
+    // the next new line in the next metro colour
+    if (this.nextColor && !base && !this.from) {
+      const now = this.api.getAppState().currentItemStrokeColor, i = METRO.findIndex(m => m.color === now)
+      this.api.updateScene({ appState: { currentItemStrokeColor: METRO[(i + 1) % METRO.length].color } })
+    }
     this.reset()
+  }
+
+  /** Lines `ids` in colour c (their extras, stations and labels follow). */
+  private recolor(ids: string[], c: string) {
+    const set = new Set(ids)
+    this.put(this.api.getSceneElements().map(e => set.has(e.id) ? bump(e, { strokeColor: c }) : e), 'IMMEDIATELY')
+  }
+
+  /** A colour picked from ligne's palette: the selected lines take it, and the lines drawn next. */
+  private pickColor(c: string) {
+    this.api.updateScene({ appState: { currentItemStrokeColor: c } })
+    const ids = this.selLines()
+    if (ids.length) this.recolor(ids, c)
+    this.panelUI()
   }
 
   /** A finished line's ends and casing, from ligne's settings (the paper colour for both). */
@@ -1688,6 +1717,19 @@ export class Ligne {
       more: (v: T) => Partial<Btn> = () => ({})): Item[] => vals.map(v => ({ title: `${label}: ${text(v)}`, text: text(v),
       on: v === now, click: () => set(v), ...more(v) }))
     const kind = this.twist ? c.style : 'plain'
+    // wire colour sets; 'own': each wire's colour picked from the signal colours (Qwiic order to start)
+    const base = this.api.getAppState().currentItemStrokeColor, cycle = SIGNAL_NAMES.map(n => SIGNALS[n])
+    const own = (n: number) => ownColors(n, c.colors)
+    const wireRows = (def: string): Menu['rows'] => [
+      { label: 'Colours', items: opt('Wire colours', SETS, c.set ?? def as any, set => this.cabling(set === 'own'
+        ? { set, colors: own(c.n) } : { set }), v => v, v => ({ swatch: swatch(v, base, own(c.n)) })) },
+      ...(c.set === 'own' ? [{ label: 'Wires', items: own(Math.min(c.n, 16)).map((col, j) => ({
+        title: `Wire ${j + 1}: ${SIGNAL_NAMES.find(n => SIGNALS[n] === col) ?? col} (click: next signal colour)`,
+        swatch: [col], text: String(j + 1), click: () => {
+          const all = own(c.n)
+          all[j] = cycle[(cycle.indexOf(col) + 1) % cycle.length]
+          this.cabling({ colors: all })
+        } })) }] : [])]
     const types = ['plain', ...STYLES] as const
     // what the popover edits: the selected lines, else the lines drawn next
     const sel = this.selLines().length
@@ -1702,8 +1744,7 @@ export class Ligne {
       { label: 'Wires', items: [this.range('Wires inside', 1, 12, c.n, (v, cap) => this.cabling({ n: v }, cap, false))] },
       { label: 'Across', items: opt('Jacket across', [2.5, 3, 4, 5, 6, 8], c.mm ?? 4, mm => this.cabling({ mm }),
         v => `${v} mm`) },
-      { label: 'Colours', items: opt('Wire colours', SETS, c.set ?? 'usb', set => this.cabling({ set }),
-        v => v, v => ({ swatch: swatch(v, this.api.getAppState().currentItemStrokeColor) })) },
+      ...wireRows('usb'),
       { label: 'Size', items: [...opt('True size ×', [1, 2, 4], c.scale ?? 2, scale => this.cabling({ scale }), v => `×${v}`),
         { icon: 'shield', text: 'shield', title: 'Shielded: braid under the jacket, shown where stripped', on: !!c.shield,
           click: () => this.cabling({ shield: !c.shield }) }] },
@@ -1729,8 +1770,7 @@ export class Ligne {
       ffc ? { label: 'Pitch', items: opt('FFC pitch [E]', FFC_PITCH, c.mm ?? .5, mm => this.cabling({ mm }), v => `${v} mm`) }
         : { label: 'Gauge', items: opt('Silicone wire [E]', GAUGES, c.awg ?? 28, awg => this.cabling({ awg }),
           v => `${v} AWG`) },
-      ...(ffc ? [] : [{ label: 'Colours', items: opt('Wire colours', SETS, c.set ?? 'mono', set => this.cabling({ set }),
-        v => v, v => ({ swatch: swatch(v, this.api.getAppState().currentItemStrokeColor) })) }]),
+      ...(ffc ? [] : wireRows('mono')),
       { label: 'Size', items: opt('True size ×', [1, 2, 4], c.scale ?? 1, scale => this.cabling({ scale }), v => `×${v}`) },
       { label: 'Ends', items: opt('Connector at both ends [C; over an end: that end]', CONNS[ffc ? 'ffc' : 'ribbon'],
         c.conn?.end ?? 'none', k => this.cabling({ conn: { start: k, end: k } }), v => CONN_NAMES[v]) },
@@ -1741,6 +1781,19 @@ export class Ligne {
     const endRow = (end: 'start' | 'end') => opt(`${end === 'start' ? 'Start' : 'End'}`, ['none', 'bar', 'dot', 'disc'] as Cap[],
       this.ends[end], v => this.finishing({ ends: { ...this.ends, [end]: v } }), v => capNames[v],
       v => ({ icon: v === 'none' ? 'line' : 'cap-' + v, text: undefined }))
+    const now = this.api.getAppState().currentItemStrokeColor
+    const colors: Menu = { icon: 'palette', title: 'ligne colours: metro lines, signals by use', open: this.menu === 'colors',
+      click: () => this.openMenu('colors'), swatch: [now], rows: [
+        { label: 'For', items: [target.cloneNode(true) as HTMLElement] },
+        { label: 'Metro', items: METRO.map(m => ({ title: m.name, swatch: [m.color], on: m.color === now,
+          click: () => this.pickColor(m.color) })) },
+        { label: 'Signal', items: SIGNAL_NAMES.map(n => ({ title: n, swatch: [SIGNALS[n]], text: n, on: SIGNALS[n] === now,
+          click: () => this.pickColor(SIGNALS[n]) })) },
+        { label: 'Auto', items: [
+          { icon: 'netlabel', text: 'by net', title: 'A net label or flag on a line colours it by its name (SDA: data, SCL: clock, GND, 3V3, …)',
+            on: this.byNet, click: () => { this.byNet = !this.byNet; this.save(); this.panelUI() } },
+          { icon: 'line', text: 'next', title: 'Each new line takes the next metro colour', on: this.nextColor,
+            click: () => { this.nextColor = !this.nextColor; this.save(); this.panelUI() } }] }] }
     const ends: Menu = { icon: 'cap-bar', title: 'Line ends (bar, open dot, disc) and casing', open: this.menu === 'ends',
       on: this.ends.start !== 'none' || this.ends.end !== 'none' || this.casing > 0, click: () => this.openMenu('ends'),
       rows: [{ label: 'For', items: [target.cloneNode(true) as HTMLElement] }, { label: 'Start', items: endRow('start') },
@@ -1786,7 +1839,7 @@ export class Ligne {
         'sep' as const,
         { icon: 'arrow', title: 'Arrowheads (Excalidraw\'s arrow style)', key: 'A', on: this.arrow, click: A.a },
         { icon: 'ticks', title: 'Direction chevrons, the way the line was drawn', key: 'D', on: this.ticks, click: A.d },
-        cable, ends,
+        colors, cable, ends,
         { icon: 'linetext', title: 'Text along a line, repeated: the label tool\'s "along"', key: '⇧T', click: A.T },
         'sep' as const,
         { icon: 'finish', title: 'End the line', key: '⏎', click: A.Enter },
@@ -1816,7 +1869,7 @@ export class Ligne {
         ...opt('Perfboard: 2.54 mm true size ×', [1, 2, 4], this.scale, v => { this.scale = v; this.save(); this.panelUI() },
           v => `×${v}`),
         font,
-      ] : [cable, ends, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
+      ] : [colors, cable, ends, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
         { icon: 'gap', title: 'Move the selected lines out on their lanes (- in)', key: '=', click: A['='] }]),
       { icon: 'pick', title: 'Take a line\'s style (or Alt-click)', key: 'I', on: this.picking, click: A.i },
       'sep', sheets,

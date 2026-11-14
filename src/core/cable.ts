@@ -13,12 +13,12 @@ export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc
 export interface Legs { start?: (XY | null)[], end?: (XY | null)[] }
 /** `pitch`: length of one full twist, or of two checks. Flat cables (ribbon, ffc): `awg` (ribbon)
  *  or `mm` (FFC pitch), true size × `scale`; ribbon colours `set`, of which a split takes the wires
- *  `pick`; `folds` per waypoint (the first: starts back up); a connector at each end. A jacket: `mm`
+ *  `pick` (set 'own': each wire's colour in `colors`); `folds` per waypoint (the first: starts back up); a connector at each end. A jacket: `mm`
  *  across, n wires inside, `shield` braid. Twisted ends `fan` out evenly: `gap` apart, `len` long. */
 export interface Cable {
   style: CableStyle, n: number, pitch: number, legs?: Legs,
   awg?: number, mm?: number, scale?: number, set?: WireSet, pick?: number[], folds?: boolean[],
-  conn?: { start?: Conn, end?: Conn }, shield?: boolean,
+  conn?: { start?: Conn, end?: Conn }, shield?: boolean, colors?: string[],
   fan?: { start?: boolean, end?: boolean, gap: number, len: number },
 }
 
