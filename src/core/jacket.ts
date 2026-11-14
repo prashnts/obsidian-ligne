@@ -2,7 +2,8 @@
 // with n wires inside. An end is plain, stripped (the shield's braid, then the wires spread out to
 // tinned tips), into a wire housing (Dupont, JST, …), or a moulded plug, all seen from above.
 import type { Cable, Piece } from './cable.ts'
-import { bandLine, edges } from './cable.ts'
+import { bandLine, box, edges } from './cable.ts'
+import { coaxFit, coaxFitting } from './coax.ts'
 import { HOUSING, MM, housing, isHousing, mix, wire, type Plug } from './flat.ts'
 import { lengths, pointAt, type XY } from './geom.ts'
 
@@ -24,26 +25,11 @@ const RELIEF = 4, BRAID = 3, LEAD = 10, TIN = 2                 // mm
 const px = (c: Cable) => MM * (c.scale ?? 1)
 export const jacketWidth = (c: Cable) => (c.mm ?? 4) * px(c)
 
-/** A rectangle from `at` (middle of its back edge) d along u, w across; `r`: rounded ends. */
-function box(at: XY, u: XY, d: number, w: number, fill: string, stroke: string, width: number, r = 0): Piece {
-  const n = left(u), c = (s: number, o: number) => add(add(at, u, s), n, o)
-  if (r <= 0) return { pts: [c(0, w / 2), c(d, w / 2), c(d, -w / 2), c(0, -w / 2), c(0, w / 2)], color: fill, fill: true,
-    stroke, width }
-  // rounded corners: quarter arcs of radius r, round the box
-  r = Math.min(r, d / 2, w / 2)
-  const arc = (cx: number, co: number, a0: number) => Array.from({ length: 7 }, (_, i) => {
-    const a = a0 + Math.PI / 2 * i / 6
-    return c(cx + Math.cos(a) * r, co + Math.sin(a) * r)
-  })
-  const pts = [...arc(d - r, w / 2 - r, 0), ...arc(r, w / 2 - r, Math.PI / 2), ...arc(r, -w / 2 + r, Math.PI),
-    ...arc(d - r, -w / 2 + r, -Math.PI / 2)]
-  return { pts: [...pts, pts[0]], color: fill, fill: true, stroke, width }
-}
-
 /** How long an end's fitting is along the cable, px. */
 export function fitting(c: Cable, end: End): number {
   const k = px(c), conn = c.conn?.[end] ?? 'none', D = jacketWidth(c)
   if (conn === 'none') return 0
+  if (c.style === 'coax') return coaxFitting(c, conn)
   const braid = c.shield ? BRAID * k : 0
   if (conn === 'strip') return braid + LEAD * k
   if (isHousing(conn)) {
@@ -82,6 +68,7 @@ export function jacket(path: XY[], radii: readonly number[], c: Cable, base: str
 function fit(c: Cable, end: End, at: XY, u: XY, base: string, dark: string, line: number): Piece[] {
   const conn = c.conn?.[end] ?? 'none', k = px(c), D = jacketWidth(c), n = left(u), out: Piece[] = []
   if (conn === 'none') return out
+  if (c.style === 'coax') return coaxFit(c, conn, at, u, line)
   if (conn !== 'strip' && !isHousing(conn)) {
     const p = PLUGS[conn as 'usbc'], w = p.w * k
     // strain relief: tapering from the sheath to the overmould

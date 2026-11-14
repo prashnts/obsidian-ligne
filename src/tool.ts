@@ -17,7 +17,8 @@
 // ones (ribbon, FFC) true to size, folded over with B, split at an end, ending in connectors.
 // Stops line up with what is drawn (guides), with the grid (G: square, isometric) and with a
 // perfboard's holes. S stations, T labels (text, boxes, net labels), X perfboards and parts.
-import { STYLES, cableWidth, fanLeg, type Cable, type CableStyle } from './core/cable.ts'
+import { STYLES, cableWidth, fanLeg, isSheathed, type Cable, type CableStyle } from './core/cable.ts'
+import { COAX, COAX_KINDS, type CoaxKind } from './core/coax.ts'
 import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, endOf, flatTips, isFlat, swatch, wire, wirePitch,
   type Conn } from './core/flat.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
@@ -92,6 +93,7 @@ const HELP: [string, string][] = [
   ['W · ⇧W', 'body on/off · round, zigzag, checks (2nd colour: Excalidraw background), ribbon, FFC, jacket, chevron'],
   ['twisted', 'popover: fan out at the start / end / both, spread and length (strands end side by side)'],
   ['jacket', 'round sheathed cable true to size: wires inside, shield, ends stripped, in a housing or a plug'],
+  ['coax', '1.13 mm to LMR-400 true to size · stripped, SMA / RP-SMA plug or jack, U.FL, MMCX, N, F, BNC'],
   ['ribbon / FFC', 'true size × scale · wire colours in the popover · E gauge / pitch'],
   ['B · ⇧B (flat)', 'fold at the next corner: turns over, the back shows · bend the other way'],
   ['C', 'connector: Dupont F / M, JST PH, SH, MX, ZIF, USB-C / A / micro-B, barrel, 3.5 mm, RJ45 · over an end: it'],
@@ -646,7 +648,7 @@ export class Ligne {
     }
     // cable leg tips near the pointer: drag them into place
     if (c && !n && this.mode === 'line') for (const l of this.lines()) {
-      if (!cableOf(l.el) || ['chevron', 'jacket'].includes(cableOf(l.el)!.style) || nearest(l.drawn, c).d > 60 / z) continue
+      if (!cableOf(l.el) || ['chevron', 'jacket', 'coax'].includes(cableOf(l.el)!.style) || nearest(l.drawn, c).d > 60 / z) continue
       for (const t of this.tips(l.el)) kids.push(dot(t.at, 4, 'ligne-snap tip' + (g?.kind === 'leg'
         && g.el === l.el && g.end === t.end && g.j === t.j ? ' end' : '')))
     }
@@ -850,7 +852,7 @@ export class Ligne {
     if (tag) return { kind: 'tag', group: groupOf(els, tag), line: findLine(els, tag.customData.ligne.line) }
     if (this.mode !== 'line') return
     // the nearest leg tip: a cable's tips sit a strand width apart
-    const tip = this.lines().filter(l => cableOf(l.el) && !['ffc', 'chevron', 'jacket'].includes(cableOf(l.el)!.style))
+    const tip = this.lines().filter(l => cableOf(l.el) && !['ffc', 'chevron', 'jacket', 'coax'].includes(cableOf(l.el)!.style))
       .flatMap(l => this.tips(l.el).map(t => ({ ...t, el: l.el })))
       .map(t => ({ t, d: dist(p, t.at) })).sort((a, b) => a.d - b.d)[0]
     if (tip && tip.d < tol * 0.6) return { kind: 'leg', el: tip.t.el, end: tip.t.end, j: tip.t.j }
@@ -1154,7 +1156,14 @@ export class Ligne {
     // a jacket: USB-like, 4 mm across, 4 wires inside, at twice true size
     if (style === 'jacket') return this.cabling({ style, n: was.style === 'jacket' ? was.n : 4, mm: 4,
       set: 'usb', scale: was.scale ?? 2, conn: { start: conn, end: conn } })
-    const odd = was.style === 'chevron' || was.style === 'jacket'
+    // coax: RG316 at twice true size, in its own colour
+    if (style === 'coax') {
+      const kind: CoaxKind = was.style === 'coax' ? was.coax ?? 'rg316' : 'rg316'
+      if (was.style !== 'coax') this.pickColor(COAX[kind].color)
+      return this.cabling({ style, n: 1, coax: kind, mm: COAX[kind].mm, scale: was.scale ?? 2, shield: undefined,
+        conn: { start: conn, end: conn } })
+    }
+    const odd = was.style === 'chevron' || was.style === 'jacket' || was.style === 'coax'
     this.cabling({ style, n: fits && !odd ? was.n : style === 'ffc' ? 20 : flat ? 6 : 2,
       ...(odd ? { pitch: 16 } : {}),
       ...(flat ? { awg: was.awg ?? 28, mm: was.mm ?? .5, set: was.set ?? 'mono', scale: was.scale ?? 1 } : {}),
@@ -1167,7 +1176,7 @@ export class Ligne {
     let best: { el: any, end: 'start' | 'end' } | undefined, bd = Infinity
     for (const l of this.lines()) {
       const c = cableOf(l.el)
-      if (!isFlat(c) && c?.style !== 'jacket') continue
+      if (!isFlat(c) && !isSheathed(c)) continue
       for (const end of ['start', 'end'] as const) {
         const d = dist(p, endOf(l.path, c!, end).at) - cableWidth(c!, 0) / 2
         if (d < tol && d < bd) { best = { el: l.el, end }; bd = d }
@@ -1180,7 +1189,8 @@ export class Ligne {
    *  is drawn next and of the selected lines. */
   private connect(hover = true) {
     const at = hover && this.mode === 'line' && this.cursor && !this.pts.length ? this.endAt(this.cursor) : undefined
-    const c = at ? cableOf(at.el)! : this.cable, list = CONNS[c.style === 'ffc' ? 'ffc' : c.style === 'jacket' ? 'jacket' : 'ribbon']
+    const c = at ? cableOf(at.el)! : this.cable
+    const list = CONNS[c.style === 'ffc' || c.style === 'jacket' || c.style === 'coax' ? c.style : 'ribbon']
     const next = (k?: Conn) => list[(list.indexOf(k ?? 'none') + 1) % list.length]
     if (!at) {
       const k = next(c.conn?.end)
@@ -1749,6 +1759,15 @@ export class Ligne {
         { icon: 'shield', text: 'shield', title: 'Shielded: braid under the jacket, shown where stripped', on: !!c.shield,
           click: () => this.cabling({ shield: !c.shield }) }] },
       ...([['Ends', CONNS.jacket.slice(0, 7)], ['Plugs', CONNS.jacket.slice(7)]] as const).map(([label, ks]) => ({ label,
+        items: opt('Both ends [C; over an end: that end]', [...ks], c.conn?.end ?? 'none',
+          k => this.cabling({ conn: { start: k, end: k } }), v => CONN_NAMES[v]) })))
+    else if (this.twist && c.style === 'coax') rows.push(
+      { label: 'Type', items: opt('Coax type (its usual colour)', COAX_KINDS, c.coax ?? 'rg316', k => {
+        this.pickColor(COAX[k].color)
+        this.cabling({ coax: k, mm: COAX[k].mm })
+      }, v => `${COAX[v].name}`) },
+      { label: 'Size', items: opt('True size ×', [1, 2, 4], c.scale ?? 2, scale => this.cabling({ scale }), v => `×${v}`) },
+      ...([['Ends', CONNS.coax.slice(0, 6)], ['', CONNS.coax.slice(6)]] as const).map(([label, ks]) => ({ label,
         items: opt('Both ends [C; over an end: that end]', [...ks], c.conn?.end ?? 'none',
           k => this.cabling({ conn: { start: k, end: k } }), v => CONN_NAMES[v]) })))
     else if (this.twist && !isFlat(c)) {

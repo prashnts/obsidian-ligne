@@ -5,6 +5,7 @@
 // Ends fan out into legs (ribbon) or end in a connector housing; Excalidraw-free pieces as cable.ts.
 import { dist, lengths, normals, octi, resample, round, unit, type XY } from './geom.ts'
 import type { Cable, Piece } from './cable.ts'
+import type { CoaxConn } from './coax.ts'
 import { ownColors } from './palette.ts'
 
 export const MM = 96 / 25.4                               // px per mm at Excalidraw's 96 dpi
@@ -31,16 +32,18 @@ export const swatch = (set: WireSet, base: string, own?: string[]) => set === 'm
 
 /** Cable ends: wire housings (Dupont female / male, JST PH, SH, MX), an FFC's ZIF, a jacket's
  *  stripped end or its plugs (jacket.ts). */
-export type Conn = 'none' | 'dupont' | 'dupontm' | 'jst' | 'sh' | 'mx' | 'zif' | Plug
+export type Conn = 'none' | 'dupont' | 'dupontm' | 'jst' | 'sh' | 'mx' | 'zif' | Plug | CoaxConn
 export type Plug = 'strip' | 'usbc' | 'usba' | 'microb' | 'barrel' | 'trs' | 'rj45'
 const WIRED: Conn[] = ['dupont', 'dupontm', 'jst', 'sh', 'mx']
-export const CONNS: Record<'ribbon' | 'ffc' | 'jacket', Conn[]> = {
+export const CONNS: Record<'ribbon' | 'ffc' | 'jacket' | 'coax', Conn[]> = {
   ribbon: ['none', ...WIRED], ffc: ['none', 'zif'],
-  jacket: ['none', 'strip', ...WIRED, 'usbc', 'usba', 'microb', 'barrel', 'trs', 'rj45'] }
+  jacket: ['none', 'strip', ...WIRED, 'usbc', 'usba', 'microb', 'barrel', 'trs', 'rj45'],
+  coax: ['none', 'strip', 'sma', 'smaf', 'rpsma', 'rpsmaf', 'ufl', 'mmcx', 'n', 'f', 'bnc'] }
 export const CONN_NAMES: Record<Conn, string> = {
   none: 'none', dupont: 'Dupont F', dupontm: 'Dupont M', jst: 'JST PH', sh: 'SH', mx: 'MX 1.25', zif: 'ZIF',
   strip: 'stripped', usbc: 'USB-C', usba: 'USB-A', microb: 'micro-B', barrel: 'barrel 5.5', trs: '3.5 mm',
-  rj45: 'RJ45' }
+  rj45: 'RJ45', sma: 'SMA plug', smaf: 'SMA jack', rpsma: 'RP-SMA plug', rpsmaf: 'RP-SMA jack', ufl: 'U.FL',
+  mmcx: 'MMCX', n: 'N plug', f: 'F (sat)', bnc: 'BNC' }
 /** Wire housings: the wires close up to their pitch and go into one. */
 export const isHousing = (k?: Conn) => !!k && WIRED.includes(k)
 /** Housings in mm: pin pitch, width beyond the outer pins' centres, depth along the wires (JST = PH,

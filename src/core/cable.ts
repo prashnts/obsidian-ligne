@@ -1,13 +1,16 @@
 // Cables: n strands of width w along a line, twisted (round or zigzag) or side by side with colour
 // checks; ribbons and FFC (flat.ts), jacketed round cables (jacket.ts), chevron bands. Each end may
 // fan out into legs, one per strand, each to its own point, or all fanned out evenly. Output is plain pieces (polylines and filled polygons), for any host to draw.
+import type { CoaxKind } from './coax.ts'
 import { MM, flatWidth, isFlat, type Conn, type WireSet } from './flat.ts'
 import { dist, lengths, normals, octi, pointAt, resample, round, unit, type XY } from './geom.ts'
 
 const sub = (a: XY, b: XY): XY => [a[0] - b[0], a[1] - b[1]]
 
-export type CableStyle = 'round' | 'zigzag' | 'checks' | 'ribbon' | 'ffc' | 'jacket' | 'chevron'
-export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc', 'jacket', 'chevron']
+export type CableStyle = 'round' | 'zigzag' | 'checks' | 'ribbon' | 'ffc' | 'jacket' | 'coax' | 'chevron'
+export const STYLES: CableStyle[] = ['round', 'zigzag', 'checks', 'ribbon', 'ffc', 'jacket', 'coax', 'chevron']
+/** Round sheathed cables drawn true to size: jackets and coax. */
+export const isSheathed = (c?: Cable) => c?.style === 'jacket' || c?.style === 'coax'
 
 /** Per end, per strand: where its leg goes, relative to that end of the line (null: straight on). */
 export interface Legs { start?: (XY | null)[], end?: (XY | null)[] }
@@ -18,7 +21,7 @@ export interface Legs { start?: (XY | null)[], end?: (XY | null)[] }
 export interface Cable {
   style: CableStyle, n: number, pitch: number, legs?: Legs,
   awg?: number, mm?: number, scale?: number, set?: WireSet, pick?: number[], folds?: boolean[],
-  conn?: { start?: Conn, end?: Conn }, shield?: boolean, colors?: string[],
+  conn?: { start?: Conn, end?: Conn }, shield?: boolean, colors?: string[], coax?: CoaxKind,
   fan?: { start?: boolean, end?: boolean, gap: number, len: number },
 }
 
@@ -32,7 +35,7 @@ const amp = (n: number, w: number) => (n - 1) * w / 2 + w / 4
 
 /** Overall width of the cable body. */
 export const cableWidth = (c: Cable, w: number) => isFlat(c) ? flatWidth(c) : c.style === 'chevron' ? c.pitch
-  : c.style === 'jacket' ? (c.mm ?? 4) * MM * (c.scale ?? 1)
+  : isSheathed(c) ? (c.mm ?? 4) * MM * (c.scale ?? 1)
   : c.style === 'checks' ? c.n * w : 2 * amp(c.n, w) + w
 
 /** The centre line of a band `width` wide: bends no tighter than its width allows (the inner edge
@@ -182,4 +185,23 @@ export function chevrons(drawn: XY[], h: number, every: number): XY[][] {
       [back[0] - v[0] * h, back[1] - v[1] * h]])
   }
   return out
+}
+
+const add = (p: XY, v: XY, k = 1): XY => [p[0] + v[0] * k, p[1] + v[1] * k]
+const left = (u: XY): XY => [-u[1], u[0]]
+
+/** A rectangle from `at` (middle of its back edge) d along u, w across; `r`: rounded ends. */
+export function box(at: XY, u: XY, d: number, w: number, fill: string, stroke: string, width: number, r = 0): Piece {
+  const n = left(u), c = (s: number, o: number) => add(add(at, u, s), n, o)
+  if (r <= 0) return { pts: [c(0, w / 2), c(d, w / 2), c(d, -w / 2), c(0, -w / 2), c(0, w / 2)], color: fill, fill: true,
+    stroke, width }
+  // rounded corners: quarter arcs of radius r, round the box
+  r = Math.min(r, d / 2, w / 2)
+  const arc = (cx: number, co: number, a0: number) => Array.from({ length: 7 }, (_, i) => {
+    const a = a0 + Math.PI / 2 * i / 6
+    return c(cx + Math.cos(a) * r, co + Math.sin(a) * r)
+  })
+  const pts = [...arc(d - r, w / 2 - r, 0), ...arc(r, w / 2 - r, Math.PI / 2), ...arc(r, -w / 2 + r, Math.PI),
+    ...arc(d - r, -w / 2 + r, -Math.PI / 2)]
+  return { pts: [...pts, pts[0]], color: fill, fill: true, stroke, width }
 }

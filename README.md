@@ -41,7 +41,9 @@ are some (its *For* row says which), else sets up the next line. Twisted ends fa
 start / end / both, spread, length): 45° out, then side by side. A jacket is a round sheathed cable
 true to size (2.5–8 mm, wires inside in USB or other colours, shield); its ends: stripped (braid,
 spread wires, tinned tips), into a Dupont F / M, JST, SH or MX housing, or a USB-C, USB-A, micro-B,
-barrel, 3.5 mm or RJ45 plug. Strands in the stroke colour and Excalidraw's background
+barrel, 3.5 mm or RJ45 plug. *coax*: RF cable true to size (1.13 mm, RG178, RG316, RG174, LMR-100,
+RG58, LMR-195, LMR-240, LMR-400, each in its usual colour), ends stripped (braid, dielectric, centre
+conductor) or an SMA / RP-SMA plug or jack, U.FL, MMCX, N, F (satellite) or BNC. Strands in the stroke colour and Excalidraw's background
 colour (white checks when none); stacked cables keep a gap. Near a cable, drag a strand's end dot to bend
 its leg out to a pin; drop it back to reset.
 Flat cables (*ribbon* / *ffc*) are drawn true to size at 96 dpi (× 1/2/4), so folds show as they will be:

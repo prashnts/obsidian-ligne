@@ -1,6 +1,6 @@
 // Room at a cable's ends: a connector (or an FFC's stiffener) needs a straight run before the
 // first bend, else it wraps round the corner. Lines are drawn and edited with that run kept free.
-import type { Cable } from './cable.ts'
+import { isSheathed, type Cable } from './cable.ts'
 import { MM, flatFitting, flatWidth, isFlat, wirePitch } from './flat.ts'
 import { fitting, jacketWidth } from './jacket.ts'
 import { dist, type XY } from './geom.ts'
@@ -11,7 +11,7 @@ type End = 'start' | 'end'
 export function fittingOf(c: Cable | undefined, end: End): number {
   if (!c) return 0
   if (isFlat(c)) return flatFitting(c, end)
-  if (c.style === 'jacket') return fitting(c, end)
+  if (isSheathed(c)) return fitting(c, end)
   return 0
 }
 

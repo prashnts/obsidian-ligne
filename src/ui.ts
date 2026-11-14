@@ -54,6 +54,7 @@ const ICONS: Record<string, string> = {
   LED: '<circle cx="10" cy="10" r="5"/><path d="M14 4l2-2M16 6l2-2"/>',
   J: '<rect x="2" y="7" width="16" height="6" rx="1"/><path d="M5 10h.1M10 10h.1M15 10h.1" stroke-width="2.5"/>',
   F: '<rect x="2" y="7" width="16" height="6" rx="1"/><rect x="4" y="9" width="2" height="2"/><rect x="9" y="9" width="2" height="2"/><rect x="14" y="9" width="2" height="2"/>',
+  coax: '<path d="M2 10h16" stroke-width="5" opacity=".3"/><path d="M2 10h16"/><circle cx="16" cy="10" r="2.5"/>',
   jacket: '<path d="M2 8h16M2 12h16" stroke-width="1.5"/><path d="M2 10h16" stroke-width="4" opacity=".35"/>',
   fan: '<path d="M2 10h6M8 10l4-5h6M8 10h10M8 10l4 5h6"/>',
   shield: '<path d="M3 7l3 6M7 7l3 6M11 7l3 6M15 7l2 4"/><path d="M2 7h16M2 13h16"/>',

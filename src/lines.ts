@@ -2,7 +2,7 @@
 // extras drawn with it in its own group (cable strands and checks, direction chevrons). Lines that
 // follow a lane of another line are rebuilt when that line changes (restack). Lines are found by
 // lid and groups, never by element id alone: Excalidraw re-ids elements on paste and duplicate.
-import { bandLine, cable, cableWidth, chevronBand, chevrons, type Cable, type Piece } from './core/cable.ts'
+import { bandLine, cable, cableWidth, chevronBand, chevrons, isSheathed, type Cable, type Piece } from './core/cable.ts'
 import { flat, isFlat } from './core/flat.ts'
 import { jacket } from './core/jacket.ts'
 import { carry, concentric, dist, offsetAt, pointAt, round, unit, upright, type XY } from './core/geom.ts'
@@ -80,9 +80,9 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   const mid: XY = [(path[0][0] + path[1][0]) / 2, (path[0][1] + path[1][1]) / 2]
   const drawn = kind === 'zone' ? round([mid, ...path.slice(1), mid], [0, ...radii.slice(1), 0]) : round(path, radii)
   // a flat cable's colours are its own: the main element is its first band, outlined in the line colour
-  const fl = isFlat(c) || c?.style === 'jacket', pieces: Piece[] = !c ? [{ pts: drawn, color: 0 }]
+  const fl = isFlat(c) || isSheathed(c), pieces: Piece[] = !c ? [{ pts: drawn, color: 0 }]
     : isFlat(c) ? flat(path, radii, c, st.strokeColor, '#ffffff')
-    : c.style === 'jacket' ? jacket(path, radii, c, st.strokeColor)
+    : isSheathed(c) ? jacket(path, radii, c, st.strokeColor)
     : c.style === 'chevron' ? [{ pts: chevronBand(bandLine(path, radii, c.pitch), c.pitch), color: 0, fill: true, width: 1 }]
     : cable(drawn, c, w).pieces
   const own = pieces.length > 1 || spec.ticks || spec.text || spec.casing || spec.ends?.start && spec.ends.start !== 'none'
