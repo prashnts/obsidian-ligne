@@ -138,3 +138,47 @@ export function roomy(pts: XY[], need0: number, need1: number, pinned: (i: numbe
   const first = dist(out[0], out[1]), last = dist(out[n - 1], out[n - 2])
   return { pts: out, short: [Math.max(0, need0 - first), Math.max(0, need1 - last)] }
 }
+
+/** Legs long enough for the arcs at their ends (r tan(turn / 2) each): a short leg grows by moving
+ *  the leg after it (else the one before) sideways. Pinned waypoints stay. */
+export function roomBends(pts: XY[], radii: readonly number[], pinned: (i: number) => boolean = () => false): XY[] {
+  let out = pts.slice()
+  const n = out.length, pin = (i: number) => i === 0 || i === n - 1 || pinned(i)
+  const cut = (p: XY[], i: number) => {
+    if (i <= 0 || i >= p.length - 1 || !(radii[i] > 0)) return 0
+    const u1 = unit(sub(p[i], p[i - 1])), u2 = unit(sub(p[i + 1], p[i]))
+    return radii[i] * Math.tan(Math.acos(Math.max(-1, Math.min(1, dot(u1, u2)))) / 2)
+  }
+  for (let k = 0; k < n - 1; k++) {
+    const miss = cut(out, k) + cut(out, k + 1) - dist(out[k], out[k + 1])
+    if (miss <= 0.5) continue
+    const u = unit(sub(out[k + 1], out[k]))
+    // the far bend slides on along this leg (the leg after it moves), else the near one slides back
+    const tries: [number, number][] = [[k + 1, miss * dot(u, legNormal(out, k + 1))]]
+    if (k > 0) tries.push([k - 1, miss * dot([-u[0], -u[1]], legNormal(out, k - 1))])
+    for (const [leg, d] of tries) {
+      if (leg > n - 2) continue
+      const r = shiftLeg(out, leg, d, { pinned: pin })
+      if (r && Math.abs(r.d - d) < 1e-6) { out = r.pts; break }
+    }
+  }
+  return out
+}
+
+/** Tiny jogs taken out: a leg shorter than `tiny` between two parallel legs goes, the leg after it
+ *  (else before) moved in line. */
+export function dropJogs(pts: XY[], tiny: number, pinned: (i: number) => boolean = () => false): XY[] {
+  let out = pts.slice()
+  const pin = (i: number) => i === 0 || i === out.length - 1 || pinned(i)
+  for (let k = 1; k < out.length - 2; k++) {
+    if (dist(out[k], out[k + 1]) >= tiny) continue
+    const a = unit(sub(out[k], out[k - 1])), b = unit(sub(out[k + 2], out[k + 1]))
+    if (dot(a, b) < 1 - 1e-6) continue
+    // the offset between the two parallel legs, across them
+    const nb = legNormal(out, k + 1), off = dot(sub(out[k], out[k + 1]), nb)
+    const na = legNormal(out, k - 1), off2 = dot(sub(out[k + 1], out[k]), na)
+    const r = shiftLeg(out, k + 1, off, { pinned: pin }) ?? shiftLeg(out, k - 1, off2, { pinned: pin })
+    if (r) out = r.pts
+  }
+  return out
+}

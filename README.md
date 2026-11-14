@@ -82,6 +82,9 @@ Excalidraw turns and moves them; `r` / `⇧R` in select mode turns the selection
 LED, male pin header, female socket, DIP, TO-92, module: click the first hole, then the last (TO-92: its middle), then ref and value
 (`R3 10k`). Lines over a board snap to its holes (wires). Parts moved or turned with Excalidraw go back
 onto the holes.
+`y` tidy, on the selected lines (else all): own bends at the radius most of them have, tiny jogs out,
+legs long enough for their arcs, room for connectors and joints; shown over the old lines (dashed red)
+until Enter (or `y`) keeps it as one step, Esc drops it.
 `k` legend, `p`/`P` A5/A6 frame (`o` landscape). `⇧C` copies the selection (else all) as SVG; the
 graph as text is in the sheets popover.
 

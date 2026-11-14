@@ -24,8 +24,8 @@ import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, across, endOf, flatTips, is
 import { JOINTS, JOINT_NAMES, jointReach, type JointKind } from './core/joint.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
-import { dropBend, jog, legNormal, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
-import { needs } from './core/lead.ts'
+import { dropBend, dropJogs, jog, legNormal, roomBends, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
+import { bendOf, needs } from './core/lead.ts'
 import { METRO, SIGNALS, SIGNAL_NAMES, netColor, ownColors } from './core/palette.ts'
 import { graph, middle, toText, type Cap, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
@@ -114,6 +114,7 @@ const HELP: [string, string][] = [
   ['beside a line', 'labels and station names: pointer\'s side, off the stack\'s edge, clear of others · level / along / across'],
   ['X · 1–9, 0', 'perfboard (drag its size), R, C, diode, LED, pin header, socket, DIP, TO-92, module: click holes'],
   ['R / ⇧R', 'select mode: turn the selection 90° / 45° (parts about pin 1)'],
+  ['Y', 'tidy the selected lines (else all): even bends, tiny jogs out, room for arcs, connectors and joints · Enter keeps, Esc drops'],
   ['K', 'legend (again: rebuild)'], ['P / ⇧P · O', 'A5 / A6 sheet · landscape'],
   ['⇧C', 'copy the selection (else all) as SVG'], ['M', 'ligne on / off'], ['?', 'this help'],
 ]
@@ -163,6 +164,7 @@ export class Ligne {
   joinMode = false                                 // J: a line started on a line's end goes on from it, under a sleeve
   jointKind: JointKind = 'shrink'
   private joining?: { el: any, end: 'start' | 'end' } // the line being drawn goes on from this end
+  private tidying?: { n: number, before: XY[][] }   // a tidy shown, not yet kept: what it changed
   cable: Cable = { style: 'checks', n: 2, pitch: 16 }
   free = false                                     // sticky Shift
   snap = true                                      // onto lines and lanes; Ctrl/Cmd held: off
@@ -669,6 +671,8 @@ export class Ligne {
       if (at.q !== c) kids.push(dot(at.q, 3.5, 'ligne-snap'))
     }
     if (this.mode === 'board' && c) kids.push(...this.boardPreview(c, path, dot))
+    // a tidy on show: the lines as they were, dashed
+    for (const b of this.tidying?.before ?? []) kids.push(path(b, 'ligne-short', 1.5, '#e03131'))
     const pr = this.press
     if (this.mode === 'station' && this.shape === 'interchange' && pr && !pr.grab && c && dist(pr.at, c) * z > DRAG * 3) {
       const a = this.snapLine(pr.at)?.q ?? pr.at, b = snapDir(a, this.snapLine(c)?.q ?? c, this.gridDirs())
@@ -763,6 +767,7 @@ export class Ligne {
     // keys go to Excalidraw's container, so its undo, delete, copy keep working
     this.container()?.focus({ preventScroll: true })
     if (this.menu) return this.openMenu()
+    if (this.tidying) this.tidyEnd(true)
     if (e.button !== 0) return
     // the second press of a double-click whose first ended a line (pointer events carry no click count)
     if (this.justEnded(e)) return
@@ -1376,7 +1381,8 @@ export class Ligne {
       return
     }
     const k = e.key, act = this.actions[k]
-    if (k === 'Escape' && this.menu) this.openMenu()
+    if (this.tidying && (k === 'Enter' || k === 'Escape')) this.tidyEnd(k === 'Enter')
+    else if (k === 'Escape' && this.menu) this.openMenu()
     else if (k === 'Escape' && this.mode === 'select') {
       // clears the selection; with none, back to drawing
       if (Object.keys(this.api.getAppState().selectedElementIds ?? {}).length)
@@ -1422,6 +1428,7 @@ export class Ligne {
     f: () => this.toggle('solid'),
     w: () => { this.twist = !this.twist; this.cabling() },
     j: () => this.toggle('joinMode'),
+    y: () => this.tidying ? this.tidyEnd(true) : this.tidy(),
     W: () => this.restyle(STYLES[(STYLES.indexOf(this.cable.style) + 1) % STYLES.length]),
     c: () => this.connect(), C: () => { this.copySvg() },
     e: () => this.cabling(this.cable.style === 'ffc'
@@ -1785,6 +1792,54 @@ export class Ligne {
     this.reset()
   }
 
+  /** Y: the selected lines (else all) tidied, shown before it is kept (Enter, Y) or dropped (Esc):
+   *  own bends at the radius most of them have, tiny jogs out, legs long enough for their arcs,
+   *  room for connectors and joints. */
+  private tidy() {
+    const sel = this.selLines(), live = this.live()
+    const scope = (sel.length ? live.filter(e => sel.includes(e.id)) : live).filter(e => isLine(e) && !stale(e))
+    const own = (s: Spec, i: number) => i > 0 && i < s.path.length - 1 && !s.links?.[i] && !s.cable?.folds?.[i]
+    const count = new Map<number, number>()
+    for (const e of scope) { const s = specOf(e); s.radii.forEach((v, i) => own(s, i) && v > 0 && count.set(v, (count.get(v) ?? 0) + 1)) }
+    const r = [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? this.r
+    let scene = this.api.getSceneElements().slice(), n = 0
+    const before: XY[][] = []
+    for (const e0 of scope) {
+      const el = scene.find(e => e.id === e0.id)
+      if (!el) continue
+      const s = specOf(el), pinned = (i: number) => !!s.links?.[i] || !!s.cable?.folds?.[i]
+      const radii = s.radii.map((v, i) => own(s, i) && v > 0 ? r : v)
+      let pts = dropJogs(s.path, JOG / this.zoom(), pinned)
+      pts = roomBends(pts, radii.map(v => bendOf(s.cable, v)), pinned)
+      const [n0, n1] = needs(pts, radii, s.cable, s.joints, bodyWidth(el))
+      pts = roomy(pts, n0, n1, pinned).pts
+      const t = tidyAlong(pts, { radii, links: s.links, folds: s.cable?.folds })
+      const same = t.pts.length === s.path.length && t.pts.every((q, i) => dist(q, s.path[i]) < 1e-6)
+        && t.al.radii.every((v, i) => v === s.radii[i])
+      if (same) continue
+      before.push(centre(el))
+      const sp: Spec = { ...s, r, path: t.pts, radii: t.al.radii, links: t.al.links,
+        cable: s.cable && { ...s.cable, folds: t.al.folds } }
+      scene = restack(this.convert, replace(scene, lineEls(this.convert, sp, styleOf(el), el)), el.id)
+      n++
+    }
+    if (!n) return this.flash('tidy: nothing to change')
+    this.tidying = { n, before }
+    this.put(scene, 'EVENTUALLY')
+    this.flash(`tidy: ${n} line${n > 1 ? 's' : ''} · Enter / Y keeps, Esc drops`)
+    this.panelUI()
+    this.draw()
+  }
+
+  /** The tidy on show kept (one undo step), or dropped. */
+  private tidyEnd(keep: boolean) {
+    if (keep) this.put(this.api.getSceneElements(), 'IMMEDIATELY')
+    else if (this.base) { this.api.updateScene({ elements: this.base, captureUpdate: 'NEVER' }); this.base = undefined }
+    this.tidying = undefined
+    this.panelUI()
+    this.draw()
+  }
+
   /** Lines `ids` in colour c (their extras, stations and labels follow). */
   private recolor(ids: string[], c: string) {
     const set = new Set(ids)
@@ -2032,6 +2087,8 @@ export class Ligne {
         { icon: 'arrow', title: 'Arrowheads (Excalidraw\'s arrow style)', key: 'A', on: this.arrow, click: A.a },
         { icon: 'ticks', title: 'Direction chevrons, the way the line was drawn', key: 'D', on: this.ticks, click: A.d },
         colors, cable, ends,
+        { icon: 'tidy', title: 'Tidy the selected lines (else all): even bends, tiny jogs out, room for arcs and connectors; shown first, Enter keeps, Esc drops',
+          key: 'Y', on: !!this.tidying, click: A.y },
         { icon: 'joint', title: `Join: start on a line's end, the new line goes on from it under a ${JOINT_NAMES[this.jointKind]} (kind: ends popover)`,
           key: 'J', on: this.joinMode, click: A.j },
         { icon: 'linetext', title: 'Text along a line, repeated: the label tool\'s "along"', key: '⇧T', click: A.T },
@@ -2065,7 +2122,8 @@ export class Ligne {
         ...opt('Perfboard: 2.54 mm true size ×', [1, 2, 4], this.scale, v => { this.scale = v; this.save(); this.panelUI() },
           v => `×${v}`),
         font,
-      ] : [colors, cable, ends, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
+      ] : [colors, cable, ends, { icon: 'tidy', title: 'Tidy the selected lines (else all); Enter keeps, Esc drops', key: 'Y',
+          on: !!this.tidying, click: A.y }, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
         { icon: 'gap', title: 'Move the selected lines out on their lanes (- in)', key: '=', click: A['='] }]),
       { icon: 'pick', title: 'Take a line\'s style (or Alt-click)', key: 'I', on: this.picking, click: A.i },
       'sep', sheets,

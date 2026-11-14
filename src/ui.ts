@@ -43,6 +43,7 @@ const ICONS: Record<string, string> = {
   'dir-flat': '<path d="M3 10h14"/><path d="M5 6h10" stroke-width="2.5"/>',
   'dir-along': '<path d="M3 17L17 3"/><path d="M4 11l7-7" stroke-width="2.5"/>',
   'dir-across': '<path d="M3 17L17 3"/><path d="M9 4l7 7" stroke-width="2.5"/>',
+  tidy: '<path d="M3 15h5l5-5h4"/><path d="M14 3l.8 1.7L16.5 5.5l-1.7.8L14 8l-.8-1.7-1.7-.8 1.7-.8z" fill="currentColor"/>',
   'cap-bar': '<path d="M2 10h13M15 5v10" stroke-width="2.2"/>',
   'cap-dot': '<path d="M2 10h9"/><circle cx="14" cy="10" r="3.5"/>',
   'cap-disc': '<path d="M2 10h9"/><circle cx="14" cy="10" r="3.5" fill="currentColor"/>',

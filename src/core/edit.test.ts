@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dropBend, jog, roomy, shiftLeg, spliceAlong, tidyAlong } from './edit.ts'
+import { dropBend, dropJogs, jog, roomBends, roomy, shiftLeg, spliceAlong, tidyAlong } from './edit.ts'
 import { dist, type XY } from './geom.ts'
 
 const near = (a: XY, b: XY) => assert.ok(dist(a, b) < 1e-6, `${a} ≉ ${b}`)
@@ -65,4 +65,18 @@ test('spliceAlong and tidyAlong keep per-point data in step', () => {
   const t = tidyAlong([[0, 0], [5, 0], [5, 0], [10, 0], [10, 5]], { radii: [0, 1, 2, 3, 4] })
   assert.deepEqual(t.pts, [[0, 0], [10, 0], [10, 5]])
   assert.deepEqual(t.al.radii, [0, 3, 4])
+})
+
+test('roomBends: a leg too short for its two arcs grows', () => {
+  // right, down 10, right: two 90° bends of radius 8 need 16 down
+  const p: XY[] = [[0, 0], [20, 0], [20, 10], [40, 10], [40, 40]]
+  const r = roomBends(p, [0, 8, 8, 8, 0])
+  assert.ok(dist(r[1], r[2]) >= 16 - 1e-6, `${dist(r[1], r[2])}`)
+  near(r[0], [0, 0]); near(r[4], [40, 40])
+})
+
+test('dropJogs: a tiny step between parallel legs goes', () => {
+  const p: XY[] = [[0, 0], [20, 0], [22, 2], [40, 2], [40, 30]]
+  const r = tidyAlong(dropJogs(p, 4), { radii: [0, 1, 1, 1, 0] }).pts
+  all(r, [[0, 0], [40, 0], [40, 30]])
 })
