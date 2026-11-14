@@ -3,8 +3,9 @@
 // follow a lane of another line are rebuilt when that line changes (restack). Lines are found by
 // lid and groups, never by element id alone: Excalidraw re-ids elements on paste and duplicate.
 import { bandLine, cable, cableWidth, chevronBand, chevrons, isSheathed, type Cable, type Piece } from './core/cable.ts'
-import { flat, isFlat } from './core/flat.ts'
+import { flat, isFlat, mix } from './core/flat.ts'
 import { jacket } from './core/jacket.ts'
+import { joint } from './core/joint.ts'
 import { carry, concentric, dist, offsetAt, pointAt, round, unit, upright, type XY } from './core/geom.ts'
 import type { LineData } from './core/graph.ts'
 import type { Body } from './core/snap.ts'
@@ -85,7 +86,7 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
     : isSheathed(c) ? jacket(path, radii, c, st.strokeColor)
     : c.style === 'chevron' ? [{ pts: chevronBand(bandLine(path, radii, c.pitch), c.pitch), color: 0, fill: true, width: 1 }]
     : cable(drawn, c, w).pieces
-  const own = pieces.length > 1 || spec.ticks || spec.text || spec.casing || spec.ends?.start && spec.ends.start !== 'none'
+  const own = pieces.length > 1 || spec.ticks || spec.text || spec.casing || spec.joints?.start || spec.joints?.end || spec.ends?.start && spec.ends.start !== 'none'
     || spec.ends?.end && spec.ends.end !== 'none' ? spec.own ?? groupId() : undefined
   const groupIds = [...(own ? [own] : []),
     ...(base?.groupIds ?? []).filter((g: string) => g !== spec.own && g !== spec.stack),
@@ -146,6 +147,15 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
         strokeStyle: 'solid', roughness: 0, opacity: st.opacity, groupIds, customData: { ligne: { kind: 'cap', of: main.id } } })
     }
   }
+  // a joint's sleeve over an end, on top of the line
+  if (kind === 'line') for (const end of ['start', 'end'] as const) {
+    const j = spec.joints?.[end]
+    if (!j) continue
+    for (const p of joint(body, end, j, bw, mix(st.strokeColor, '#000000', .3), c?.scale ?? 1))
+      extras.push(extra(p.pts, p.fill ? { strokeColor: p.stroke ?? 'transparent', backgroundColor: p.color, fillStyle: 'solid',
+        strokeWidth: p.width ?? 1, roughness: 0, opacity: 100 } : { strokeColor: p.color, strokeWidth: p.width ?? 1,
+        strokeStyle: 'solid', roughness: 0, opacity: 100 }, 'joint'))
+  }
   return [main, ...convert(extras), ...(spec.text ? lineText(convert, path, radii, bw, spec.text, st.strokeColor,
     main.id, groupIds) : [])]
 }
@@ -175,7 +185,7 @@ function lineText(convert: Convert, path: XY[], radii: number[], bw: number, t: 
 }
 
 /** Kinds of the elements drawn with a line: cable strands, chevrons, repeated text, casing, ends. */
-export const EXTRAS = ['strand', 'tick', 'rep', 'case', 'cap']
+export const EXTRAS = ['strand', 'tick', 'rep', 'case', 'cap', 'joint']
 /** A line's elements in drawing order: its casing under it. */
 export const layered = (els: any[]) => [...els.filter(e => e.customData?.ligne?.kind === 'case'),
   ...els.filter(e => e.customData?.ligne?.kind !== 'case')]

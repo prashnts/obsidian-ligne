@@ -19,8 +19,9 @@
 // perfboard's holes. S stations, T labels (text, boxes, net labels), X perfboards and parts.
 import { STYLES, cableWidth, fanLeg, isSheathed, type Cable, type CableStyle } from './core/cable.ts'
 import { COAX, COAX_KINDS, type CoaxKind } from './core/coax.ts'
-import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, endOf, flatTips, isFlat, swatch, wire, wirePitch,
+import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, across, endOf, flatTips, isFlat, swatch, wire, wirePitch,
   type Conn } from './core/flat.ts'
+import { JOINTS, JOINT_NAMES, jointReach, type JointKind } from './core/joint.ts'
 import { beside, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt,
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
 import { dropBend, jog, legNormal, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
@@ -93,6 +94,7 @@ const HELP: [string, string][] = [
   ['W · ⇧W', 'body on/off · round, zigzag, checks (2nd colour: Excalidraw background), ribbon, FFC, jacket, chevron'],
   ['twisted', 'popover: fan out at the start / end / both, spread and length (strands end side by side)'],
   ['jacket', 'round sheathed cable true to size: wires inside, shield, ends stripped, in a housing or a plug'],
+  ['J', 'join: start on a line\'s end (a ribbon\'s wire, a jacket\'s next wire): the new line goes on from it, under a heat-shrink, boot or splice'],
   ['coax', '1.13 mm to LMR-400 true to size · stripped, SMA / RP-SMA plug or jack, U.FL, MMCX, N, F, BNC'],
   ['ribbon / FFC', 'true size × scale · wire colours in the popover · E gauge / pitch'],
   ['B · ⇧B (flat)', 'fold at the next corner: turns over, the back shows · bend the other way'],
@@ -155,6 +157,9 @@ export class Ligne {
   casing = 0                                       // px of paper colour either side, under the line
   byNet = true                                     // a net label or flag on a line colours it by its name
   nextColor = false                                // each new line takes the next metro colour
+  joinMode = false                                 // J: a line started on a line's end goes on from it, under a sleeve
+  jointKind: JointKind = 'shrink'
+  private joining?: { el: any, end: 'start' | 'end' } // the line being drawn goes on from this end
   cable: Cable = { style: 'checks', n: 2, pitch: 16 }
   free = false                                     // sticky Shift
   snap = true                                      // onto lines and lanes; Ctrl/Cmd held: off
@@ -628,7 +633,9 @@ export class Ligne {
     if (ln) kids.push(path(round(ln.path.map((_, i) => offsetAt(ln.path, i, 0, ln.d)),
       concentric(ln.path, ln.radii, ln.d)), 'ligne-guide', 1.5), dot(ln.q, 5, 'ligne-snap lane'))
     const g = c && !n ? this.grab(c) : undefined
-    if (c && n && (this.closing(c) || this.near(c, this.pts[n - 1])))
+    const jn = c && !n && this.mode === 'line' && this.joinMode ? this.joinAt(c) : undefined
+    if (jn) kids.push(dot(jn.at, 6, 'ligne-snap end'))
+    else if (c && n && (this.closing(c) || this.near(c, this.pts[n - 1])))
       kids.push(dot(this.closing(c) ? this.pts[0] : this.pts[n - 1], 8, 'ligne-snap end'))
     else if (g?.kind === 'point') kids.push(dot(pathOf(g.el)[g.i], 6, 'ligne-snap point'))
     else if (c && !n && this.mode !== 'station') {
@@ -727,6 +734,8 @@ export class Ligne {
       if (this.near(p, this.pts[this.pts.length - 1])) return 'end the line'
       return
     }
+    const jn = this.joinMode && this.joinAt(p)
+    if (jn) return `join: a line goes on from here, under a ${JOINT_NAMES[this.jointKind]}`
     const g = this.grab(p)
     if (g?.kind === 'point') return 'drag: move the bend · double-click: take it out'
     if (g && g.kind !== 'leg' && g.kind !== 'seg') return 'drag: move'
@@ -1030,6 +1039,8 @@ export class Ligne {
   /** First stop: on a line's end the line is extended (in its own style, replaced on finish), on a
    *  lane it starts following that line, on a line it branches. */
   private start(p: XY, shift = false) {
+    const jn = this.joinMode && this.joinAt(p)
+    if (jn) return this.startJoin(jn)
     // a flat cable's end: a fanned wire goes on; a wire starts a bundle of it (⇧: the whole cable goes on)
     const leg = this.legAt(p), t = !leg && this.wireAt(p)
     if (leg) return this.fromLeg(leg)
@@ -1059,6 +1070,50 @@ export class Ligne {
         this.api.updateScene({ appState: toState(lookOf(hit.el)) })
       }
     }
+  }
+
+  /** A line's end at p to join a new line to: where the new line starts (a flat cable's wire there,
+   *  a sheathed cable's next free wire, else the end itself), the way out, its offset across the
+   *  end (left of travel) and the wire's colour. */
+  private joinAt(p: XY) {
+    const w = this.wireAt(p)
+    const at = w ? { el: w.el, end: w.end } : this.endAt(p) ?? (() => {
+      const h = this.snapLine(p)
+      return h?.el && h.end ? { el: h.el, end: h.end } : undefined
+    })()
+    if (!at) return
+    const el = at.el, path = pathOf(el), c = cableOf(el), lid = lidOf(el), base = el.strokeColor
+    const n = path.length, a = at.end === 'end' ? path[n - 1] : path[0], b = at.end === 'end' ? path[n - 2] : path[1]
+    const out = unit([a[0] - b[0], a[1] - b[1]]), u: XY = at.end === 'end' ? out : [-out[0], -out[1]], nl: XY = [-u[1], u[0]]
+    let d = 0, color: string | undefined
+    if (w && c) {
+      d = across(c, endOf(path, c, w.end).side, w.j)
+      color = wire(c, w.j, base).color
+    } else if (c && isSheathed(c) && c.n > 1) {
+      // the next wire out of the sheath, spread across it
+      const taken = this.lines().filter(l => dataOf(l.el)!.links?.[0]?.of === lid
+        && (dataOf(l.el)!.links![0]!.t > 0.5) === (at.end === 'end')).length, j = taken % c.n
+      d = (j - (c.n - 1) / 2) * bodyWidth(el) / c.n * .8
+      color = wire(c, j, base).color
+    }
+    return { el, end: at.end, at: [a[0] + nl[0] * d, a[1] + nl[1] * d] as XY, out, d, color }
+  }
+
+  /** Starts a line going on from a line's end (see joinAt): in ligne's own body, a plain wire in the
+   *  wire's colour; its first stop stays on that end, its first leg runs straight out under the sleeve. */
+  private startJoin(j: NonNullable<ReturnType<Ligne['joinAt']>>) {
+    this.reset()
+    const path = pathOf(j.el), n = path.length
+    if (!this.twist && j.color) this.api.updateScene({ appState: { currentItemStrokeColor: j.color } })
+    const reach = jointReach({ kind: this.jointKind }, bodyWidth(j.el), cableOf(j.el)?.scale ?? 1).f
+    const lead = reach + Math.max(this.width(), 2 * SNAP / this.zoom())
+    this.pts = [j.at, [j.at[0] + j.out[0] * lead, j.at[1] + j.out[1] * lead]]
+    this.meta = [{ r: this.r, link: { of: lidOf(j.el), i: j.end === 'end' ? n - 2 : 0, t: j.end === 'end' ? 1 : 0, d: j.d } },
+      { r: this.r, link: null }]
+    this.from = lidOf(j.el)
+    this.joining = { el: j.el, end: j.end }
+    this.panelUI()
+    this.draw()
   }
 
   /** Goes on drawing line el from its end (in its own style, replaced on finish). */
@@ -1271,9 +1326,9 @@ export class Ligne {
 
   private save() {
     const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, ends, casing, byNet,
-      nextColor } = this
+      nextColor, jointKind } = this
     localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
-      scale, ends, casing, byNet, nextColor }))
+      scale, ends, casing, byNet, nextColor, jointKind }))
   }
 
   private undoStop() {
@@ -1354,6 +1409,7 @@ export class Ligne {
     h: () => this.toggle('help'), i: () => this.toggle('picking'), d: () => this.toggle('ticks'),
     f: () => this.toggle('solid'),
     w: () => { this.twist = !this.twist; this.cabling() },
+    j: () => this.toggle('joinMode'),
     W: () => this.restyle(STYLES[(STYLES.indexOf(this.cable.style) + 1) % STYLES.length]),
     c: () => this.connect(), C: () => { this.copySvg() },
     e: () => this.cabling(this.cable.style === 'ffc'
@@ -1369,7 +1425,7 @@ export class Ligne {
     k: () => this.legend(), p: () => this.paper('A5'), P: () => this.paper('A6'),
   }
   private toggle(k: 'boxed' | 'landscape' | 'help' | 'picking' | 'ticks' | 'arrow' | 'free' | 'snap' | 'bend' | 'onLine'
-    | 'flip' | 'solid') {
+    | 'flip' | 'solid' | 'joinMode') {
     this[k] = !this[k]
     if (k === 'ticks') this.applySel(s => { s.ticks = this.ticks }, 'IMMEDIATELY')
     if (k === 'onLine' || k === 'solid') this.save()
@@ -1388,7 +1444,7 @@ export class Ligne {
   }
   private reset() {
     this.pts = []; this.meta = []
-    this.from = this.editing = this.fork = this.lead = this.track = this.split = this.pin = undefined
+    this.from = this.editing = this.fork = this.lead = this.track = this.split = this.pin = this.joining = undefined
     this.bend = this.flip = this.startBack = false
     this.guides = []
     this.draw()
@@ -1606,6 +1662,18 @@ export class Ligne {
         return a0 <= x1 && a1 >= x0 && b0 <= y1 && b1 >= y0
       })
       scene = k < 0 ? [...scene, ...els] : [...scene.slice(0, k), ...els, ...scene.slice(k)]
+    } else if (this.joining && scene.some(e => e.id === this.joining!.el.id)) {
+      // a line going on from another's end: under it (its sleeve covers the start); that end gets the joint
+      const jn = this.joining, k = scene.findIndex(e => e.id === jn.el.id), parent = scene[k], ps = specOf(parent)
+      scene = [...scene.slice(0, k), ...layered(els), ...scene.slice(k)]
+      const was = ps.joints?.[jn.end], wide = Math.max(was?.w ?? 0, bodyWidth(els[0]), bodyWidth(parent))
+      ps.joints = { ...ps.joints, [jn.end]: { kind: was?.kind ?? this.jointKind, w: wide } }
+      if (ps.cable?.conn?.[jn.end]) ps.cable = { ...ps.cable, conn: { ...ps.cable.conn, [jn.end]: 'none' } }
+      // room for the sleeve on the line that ends
+      const [n0, n1] = needs(ps.path, ps.radii, ps.cable, ps.joints, bodyWidth(parent))
+      ps.path = roomy(ps.path, jn.end === 'start' ? n0 : 0, jn.end === 'end' ? n1 : 0,
+        i => !!ps.links?.[i] || !!ps.cable?.folds?.[i]).pts
+      scene = restack(this.convert, replace(scene, lineEls(this.convert, ps, styleOf(parent), parent)), parent.id)
     } else scene = [...scene, ...layered(els)]
     const sp = this.split, parent = sp && scene.find(e => e.id === sp.el.id), pc = parent && cableOf(parent)
     if (sp && pc?.conn?.[sp.end] && pc.conn[sp.end] !== 'none') {
@@ -1817,6 +1885,14 @@ export class Ligne {
       on: this.ends.start !== 'none' || this.ends.end !== 'none' || this.casing > 0, click: () => this.openMenu('ends'),
       rows: [{ label: 'For', items: [target.cloneNode(true) as HTMLElement] }, { label: 'Start', items: endRow('start') },
         { label: 'End', items: endRow('end') },
+        { label: 'Joint', items: opt('Joint where a line goes on from another (J): the selected lines\' joints too', JOINTS,
+          this.jointKind, k => {
+            this.jointKind = k
+            this.applySel(s => {
+              for (const e of ['start', 'end'] as const) if (s.joints?.[e]) s.joints = { ...s.joints, [e]: { ...s.joints[e]!, kind: k } }
+            }, 'IMMEDIATELY')
+            this.save(); this.panelUI()
+          }, v => JOINT_NAMES[v]) },
         { label: 'Casing', items: [this.range('Casing: a band of the paper colour either side, under the line (gaps where lines cross)',
           0, 8, this.casing, (v, cap) => this.finishing({ casing: v }, cap, false))] }] }
     const cable: Menu = { icon: this.twist ? c.style : 'twist', title: 'Line body: plain, cable, chevron band', key: 'W',
@@ -1859,6 +1935,8 @@ export class Ligne {
         { icon: 'arrow', title: 'Arrowheads (Excalidraw\'s arrow style)', key: 'A', on: this.arrow, click: A.a },
         { icon: 'ticks', title: 'Direction chevrons, the way the line was drawn', key: 'D', on: this.ticks, click: A.d },
         colors, cable, ends,
+        { icon: 'joint', title: `Join: start on a line's end, the new line goes on from it under a ${JOINT_NAMES[this.jointKind]} (kind: ends popover)`,
+          key: 'J', on: this.joinMode, click: A.j },
         { icon: 'linetext', title: 'Text along a line, repeated: the label tool\'s "along"', key: '⇧T', click: A.T },
         'sep' as const,
         { icon: 'finish', title: 'End the line', key: '⏎', click: A.Enter },

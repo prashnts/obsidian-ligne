@@ -4,6 +4,7 @@ import { isSheathed, type Cable } from './cable.ts'
 import { MM, flatFitting, flatWidth, isFlat, wirePitch } from './flat.ts'
 import { fitting, jacketWidth } from './jacket.ts'
 import { dist, type XY } from './geom.ts'
+import { jointReach, type Joint } from './joint.ts'
 
 type End = 'start' | 'end'
 
@@ -23,14 +24,15 @@ export function bendOf(c: Cable | undefined, r: number): number {
   return r
 }
 
-/** The straight run each end of a line needs, px: its fitting, a little cable, and the part of
+/** The straight run each end of a line needs, px: its fitting (or a joint's sleeve over it), a little cable, and the part of
  *  the leg the first bend's arc takes. 0 at an end without a fitting. */
-export function needs(path: XY[], radii: readonly number[], c: Cable | undefined): [number, number] {
+export function needs(path: XY[], radii: readonly number[], c: Cable | undefined,
+  joints?: { start?: Joint, end?: Joint }, w = 0): [number, number] {
   const n = path.length
   const at = (end: End, b: number) => {
-    const f = fittingOf(c, end)
+    const j = joints?.[end], f = Math.max(fittingOf(c, end), j ? jointReach(j, w, c?.scale ?? 1).b : 0)
     if (!f) return 0
-    const body = 4 * MM * (c!.scale ?? 1)
+    const body = 4 * MM * (c?.scale ?? 1)
     if (b <= 0 || b >= n - 1) return f + body
     // the arc at bend b starts r tan(turn / 2) before it
     const [p, v, q] = [path[b - 1], path[b], path[b + 1]]

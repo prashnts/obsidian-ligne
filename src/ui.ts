@@ -38,6 +38,7 @@ const ICONS: Record<string, string> = {
   twist: '<path d="M2 7c4 0 4 6 8 6s4-6 8-6M2 13c4 0 4-6 8-6s4 6 8 6"/>',
   finish: '<path d="M4 10l4 4 8-8"/>',
   palette: '<path d="M10 2.5a7.5 7.5 0 1 0 0 15c1.2 0 1.6-.9 1.2-1.8-.5-1 .1-2.2 1.3-2.2H15a2.5 2.5 0 0 0 2.5-2.5A7.5 7.5 0 0 0 10 2.5z"/><circle cx="6.5" cy="9" r="1"/><circle cx="9" cy="6" r="1"/><circle cx="13" cy="7" r="1"/>',
+  joint: '<path d="M2 10h5M13 7l5-3M13 10h5M13 13l5 3"/><rect x="6" y="7" width="8" height="6" rx="2.5" fill="currentColor"/>',
   'cap-bar': '<path d="M2 10h13M15 5v10" stroke-width="2.2"/>',
   'cap-dot': '<path d="M2 10h9"/><circle cx="14" cy="10" r="3.5"/>',
   'cap-disc': '<path d="M2 10h9"/><circle cx="14" cy="10" r="3.5" fill="currentColor"/>',

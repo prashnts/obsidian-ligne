@@ -55,6 +55,11 @@ pointer. A cable with connectors keeps a straight run for them: the bend next to
 back (shown as you draw; still too short: dashed red). At a flat cable's end, click a wire: a bundle of it goes on (click another wire: up to it; all
 of them, or ⇧-click: the cable itself). Drag a wire to fan it out; click a fanned wire: a plain line
 goes on from it. Click a cable's body to branch off it. By the pointer, a hint says what a click does.
+Harnesses: `j` (join) and start on a line's end: the new line, in the body set up now, goes on from
+there under a sleeve (heat-shrink, moulded boot or butt splice; ends popover). On a ribbon it starts at
+the wire clicked, on a jacket at its next wire, a plain line in that wire's colour: a ribbon or jacket
+turns into a pigtail of loose wires, a coax into another coax. The sleeve belongs to the line that ends
+(its connector there goes); the joined lines start under it and follow when it moves.
 Text along a line, repeated (knocked out of thin lines, inside thick ones): label tool *along* (`⇧T`). `d` direction
 chevrons, `a` arrowheads. Colours popover: eight metro colours, and signal colours by use (power, ground, data in light navy,
 clock in mid-light green, analog, control, RF); *by net*: a net label or flag on a line colours it by
