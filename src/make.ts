@@ -1,7 +1,8 @@
 // Excalidraw element skeletons ligne adds: station marks with labels, net flags, legend, paper frames.
 // Everything goes through the host's convertToExcalidrawElements, then text ids are shortened.
 import type { XY } from './core/geom.ts'
-import { inner, outline, type BlockData, type BlockKind } from './core/block.ts'
+import { SIDES, inner, isDevice, outline, parseDevice, portAt, type BlockData, type BlockKind, type DeviceKind, type Pins,
+  type Port } from './core/block.ts'
 import type { LabelData, Shape, StationData } from './core/graph.ts'
 
 /** Excalidraw's convertToExcalidrawElements, from whichever bundle the host ships. */
@@ -238,6 +239,7 @@ export function block(convert: Convert, o: { kind: BlockKind, box: [number, numb
     const [e] = make(convert, [{ type: 'text', x: 0, y: 0, text: t, ...ink, textAlign: 'center' }])
     return { ...e, x: cx - e.width / 2, y: cy - e.height / 2, groupIds: [g] }
   }
+  if (isDevice(o.kind)) return device(convert, o.kind, o.box, o.text, o.color, o.font, g, bid)
   if (o.kind === 'text') {
     const t = text(o.text || 'text', x + w / 2, y + h / 2)
     return [{ ...t, ...tag }]
@@ -285,6 +287,66 @@ export function block(convert: Convert, o: { kind: BlockKind, box: [number, numb
   const cy = o.kind === 'database' ? y + h * .55 : o.kind === 'folder' ? y + h * .58 : o.kind === 'document' ? y + h * .44 : y + h / 2
   return [shape, ...more, ...(o.text ? [text(o.text, x + w / 2, cy)] : [])]
 }
+
+/** Device looks: body fill, outline, title ink, pin marks. A board is a PCB, an MCU a chip. */
+const LOOK: Record<DeviceKind, (c: string) => { fill: string, stroke: string, ink: string, pin: string, round: boolean }> = {
+  mcu: () => ({ fill: '#3b3f45', stroke: '#1e1e1e', ink: '#f8f9fa', pin: '#adb5bd', round: false }),
+  board: () => ({ fill: '#cfe8d5', stroke: '#4f8a5e', ink: '#1e1e1e', pin: '#d4a72c', round: true }),
+  pc: c => ({ fill: '#ffffff', stroke: c, ink: '#1e1e1e', pin: c, round: true }),
+  device: c => ({ fill: mix(c), stroke: c, ink: '#1e1e1e', pin: c, round: true }),
+}
+
+/** A device from its spec (title; pins per side, see parseDevice): body, title, pin marks and names
+ *  inside along their sides; an MCU's pins as legs, a board's mounting holes, a PC's screen mark. */
+function device(convert: Convert, kind: DeviceKind, box: [number, number, number, number], spec: string, color: string,
+  font: Font, g: string, bid: string): any[] {
+  // a pale colour would vanish on the white body: a dark grey instead
+  const pale = (c: string) => { const m = c.match(/^#([0-9a-f]{6})/i)?.[1]
+    return !!m && [0, 2, 4].reduce((a, i, k) => a + parseInt(m.slice(i, i + 2), 16) * [.3, .59, .11][k], 0) > 200 }
+  const [x, y, w, h] = box, { title, pins } = parseDevice(spec), lk = LOOK[kind](pale(color) ? '#495057' : color)
+  const data: BlockData = { kind: 'block', shape: kind, bid, pins, spec }
+  const thin = { strokeWidth: 1, roughness: 0, groupIds: [g] }
+  const [body] = make(convert, [{ type: 'rectangle', x, y, width: w, height: h, strokeColor: lk.stroke, backgroundColor: lk.fill,
+    fillStyle: 'solid', strokeWidth: 2, roughness: 0, roundness: lk.round ? { type: 3 } : null, groupIds: [g],
+    customData: { ligne: data } }])
+  const out: any[] = [body], small = { ...font, fontSize: Math.max(10, Math.round(font.fontSize * .7)) }
+  const txt = (t: string, ink: string, f: Font, align: 'left' | 'center' | 'right', ax: number, ay: number, vy = .5) => {
+    const [e] = make(convert, [{ type: 'text', x: 0, y: 0, text: t, ...f, strokeColor: ink, textAlign: align }])
+    const ex = align === 'left' ? ax : align === 'right' ? ax - e.width : ax - e.width / 2
+    return { ...e, x: ex, y: ay - e.height * vy, groupIds: [g] }
+  }
+  if (kind === 'board') for (const [hx, hy] of [[9, 9], [w - 9, 9], [9, h - 9], [w - 9, h - 9]])
+    out.push(...make(convert, [{ type: 'ellipse', x: x + hx - 3.5, y: y + hy - 3.5, width: 7, height: 7, strokeColor: lk.stroke,
+      backgroundColor: '#ffffff', fillStyle: 'solid', ...thin }]))
+  if (kind === 'mcu') out.push(...make(convert, [{ type: 'ellipse', x: x + 3, y: y + 3, width: 5, height: 5, strokeColor: lk.pin,
+    backgroundColor: lk.pin, fillStyle: 'solid', ...thin }]))
+  if (kind === 'pc') {
+    // a small screen on its stand, over the title
+    const sx = x + w / 2 - 8, sy = y + h / 2 - title.split('\n').length * font.fontSize * .65 - 20
+    const c = lk.stroke
+    out.push(...make(convert, [{ type: 'rectangle', x: sx, y: sy, width: 16, height: 11, strokeColor: c, backgroundColor: mix(c),
+      fillStyle: 'solid', ...thin, roundness: null }, { type: 'line', x: sx + 8, y: sy + 11, points: [[0, 0], [0, 3]], strokeColor: c,
+      ...thin, roundness: null }, { type: 'line', x: sx + 4, y: sy + 14, points: [[0, 0], [8, 0]], strokeColor: c, ...thin,
+      roundness: null }]))
+  }
+  // pins: a mark on the edge (an MCU: a leg out of it), the name inside
+  for (const side of SIDES) (pins[side] ?? []).forEach((name, i) => {
+    const [px, py] = portAt(box, `${side}${i}` as Port, pins), vert = side === 'n' || side === 's'
+    const o: XY = side === 'n' ? [0, -1] : side === 's' ? [0, 1] : side === 'e' ? [1, 0] : [-1, 0]
+    if (kind === 'mcu') out.push(...make(convert, [{ type: 'line', x: px, y: py, points: [[0, 0], [o[0] * 7, o[1] * 7]],
+      strokeColor: lk.pin, ...thin, strokeWidth: 3, roundness: null }]))
+    else out.push(...make(convert, [{ type: 'rectangle', x: px - 3, y: py - 3, width: 6, height: 6, strokeColor: lk.stroke,
+      backgroundColor: lk.pin, fillStyle: 'solid', ...thin, roundness: null }]))
+    const ink = kind === 'mcu' ? '#dee2e6' : '#495057'
+    out.push(vert ? txt(name, ink, small, 'center', px, side === 'n' ? py + 6 : py - 6, side === 'n' ? 0 : 1)
+      : txt(name, ink, small, side === 'w' ? 'left' : 'right', side === 'w' ? px + 7 : px - 7, py))
+  })
+  if (title) out.push(txt(title, lk.ink, font, 'center', x + w / 2, y + h / 2))
+  return out
+}
+
+/** A device's pins (from its shape's data). */
+export const devicePins = (e: any): Pins | undefined => e?.customData?.ligne?.pins
 
 /** A light tint of a #rrggbb colour (table headers). */
 const mix = (c: string) => /^#[0-9a-f]{6}$/i.test(c) ? c + '22' : '#f1f3f5'

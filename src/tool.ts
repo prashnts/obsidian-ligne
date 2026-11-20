@@ -18,7 +18,8 @@
 // Stops line up with what is drawn (guides), with the grid (G: square, isometric) and with a
 // perfboard's holes. S stations, T labels (text, boxes, net labels), X perfboards and parts.
 import { STYLES, cableWidth, fanLeg, isSheathed, type Cable, type CableStyle } from './core/cable.ts'
-import { BLOCKS, SIZE, nearestPort, outOf, portAt, type BlockKind, type Dock, type Port } from './core/block.ts'
+import { BLOCKS, SIZE, deviceSize, isDevice, nearestPort, outOf, parseDevice, portAt, portsOf, type BlockKind, type Dock
+  } from './core/block.ts'
 import { COAX, COAX_KINDS, type CoaxKind } from './core/coax.ts'
 import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, across, endOf, flatTips, isFlat, setColors, setSize, swatch, wire,
   wirePitch, type Conn, type WireSet } from './core/flat.ts'
@@ -39,7 +40,7 @@ import { PARTS, PART_NAMES, clicks, board, holeAt, part, pinsAt, pinsOf, pitchOf
   type PartKind } from './board.ts'
 import { EXTRAS, bodyOf, bodyWidth, cableOf, centre, dataOf, findLine, isLine, layered, lidOf, lineEls, pathOf, radiiOf, relink, replace,
   onLanes, resized, restack, specOf, stale, type Spec } from './lines.ts'
-import { DOT, FONTS, LABELS, PAPER, SIZES, block, blockBox, bump, capsule, fromState, groupId, label, legend, paper, station, styleOf, toState,
+import { DOT, FONTS, LABELS, PAPER, SIZES, block, blockBox, bump, devicePins, capsule, fromState, groupId, label, legend, paper, station, styleOf, toState,
   turned, type Convert, type Font, type LabelDir, type LabelType, type Style } from './make.ts'
 import { Panel, type Btn, type Item, type Menu } from './ui.ts'
 
@@ -119,7 +120,8 @@ const HELP: [string, string][] = [
   ['interchange', 'click a stack: a capsule across all its lines, at its angle · drag from line to line: one between them'],
   ['T · 1–7 · B · F', 'labels: text, box, rounded, net label, flag, along the line, pill · on a line / beside it · solid'],
   ['beside a line', 'labels and station names: pointer\'s side, off the stack\'s edge, clear of others · level / along / across'],
-  ['Q · 1–9, 0', 'blocks: process, decision, terminator, data, document, database, folder, table, text, icon · lines dock on their sides and follow them'],
+  ['Q · 1–9, 0', 'blocks: process, decision, terminator, data, document, database, MCU, board, PC, device (then folder, table, text, icon) · lines dock on their sides and follow them'],
+  ['devices', 'title; pins per side: "Pi 4; e: USB0, USB1, ETH; s: USB-C, HDMI0" · lines dock on each pin · click a device to edit'],
   ['X · 1–9, 0', 'perfboard (drag its size), R, C, diode, LED, pin header, socket, DIP, TO-92, module: click holes'],
   ['R / ⇧R', 'select mode: turn the selection 90° / 45° (parts about pin 1)'],
   ['Y', 'tidy the selected lines (else all): even bends, tiny jogs out, room for arcs, connectors and joints · Enter keeps, Esc drops'],
@@ -1607,7 +1609,7 @@ export class Ligne {
   /** The blocks in the scene: shape element, id, box. */
   private blocks() {
     return this.live().filter(e => e.customData?.ligne?.kind === 'block')
-      .map(e => ({ el: e, bid: e.customData.ligne.bid as string, box: blockBox(e) }))
+      .map(e => ({ el: e, bid: e.customData.ligne.bid as string, box: blockBox(e), pins: devicePins(e) }))
   }
 
   /** A block's port near p (inside the block, or just outside it): block id, port, its point. */
@@ -1617,7 +1619,7 @@ export class Ligne {
     for (const b of this.blocks()) {
       const [x, y, w, h] = b.box
       if (p[0] < x - tol || p[0] > x + w + tol || p[1] < y - tol || p[1] > y + h + tol) continue
-      const n = nearestPort(b.box, p)
+      const n = nearestPort(b.box, p, b.pins)
       return { bid: b.bid, port: n.port, at: n.at }
     }
   }
@@ -1629,8 +1631,8 @@ export class Ligne {
    *  those of its other end). */
   private docksOf(pts: XY[], had?: { start?: Dock, end?: Dock }) {
     const end = (q: XY): Dock | undefined => {
-      for (const b of this.blocks()) for (const port of ['n', 'e', 's', 'w'] as Port[])
-        if (dist(portAt(b.box, port), q) < 1e-6) return { block: b.bid, port }
+      for (const b of this.blocks()) for (const port of portsOf(b.pins))
+        if (dist(portAt(b.box, port, b.pins), q) < 1e-6) return { block: b.bid, port }
     }
     const rev = this.editing?.reversed
     const start = rev ? end(pts[0]) : this.dockStart ?? had?.start ?? end(pts[0])
@@ -1638,11 +1640,25 @@ export class Ligne {
     return start || fin ? { start, end: fin } : undefined
   }
 
-  /** Blocks mode: a block at p (a click: its usual size, centred; a drag: that box), then its text. */
+  /** Blocks mode: a block at p (a click: its usual size, centred; a drag: that box), then its text.
+   *  A device asks for its spec and takes the size its pins need; a click on a device edits it. */
   private placeBlock(p: XY, to: XY) {
     const kind = this.blockKind, [w0, h0] = SIZE[kind]
     const dragged = dist(p, to) * this.zoom() > DRAG * 3
+    const hit = !dragged && this.blocks().find(b => b.pins && p[0] >= b.box[0] && p[0] <= b.box[0] + b.box[2]
+      && p[1] >= b.box[1] && p[1] <= b.box[1] + b.box[3])
+    if (hit) return this.editDevice(hit)
     const a = this.placed(p).q, b = this.placed(to).q
+    if (isDevice(kind)) {
+      const font = this.labelFont(), s = this.api.getAppState()
+      return this.ask(a, spec => {
+        const { title, pins } = parseDevice(spec), [w, h] = deviceSize(kind, title, pins, font.fontSize * .6)
+        const box: [number, number, number, number] = dragged
+          ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(w, Math.abs(b[0] - a[0])), Math.max(h, Math.abs(b[1] - a[1]))]
+          : [a[0] - w / 2, a[1] - h / 2, w, h]
+        this.add(block(this.convert, { kind, box, text: spec, color: s.currentItemStrokeColor, font }))
+      }, '', false, `${kind}; e: USB, SDA, SCL; w: 5V, GND  (sides n e s w)`)
+    }
     const box: [number, number, number, number] = dragged
       ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(24, Math.abs(b[0] - a[0])), Math.max(24, Math.abs(b[1] - a[1]))]
       : [a[0] - w0 / 2, a[1] - h0 / 2, w0, h0]
@@ -1651,15 +1667,31 @@ export class Ligne {
       color: s.currentItemStrokeColor, font: this.labelFont() })), kind === 'icon' ? '★' : '', true)
   }
 
+  /** A device's spec asked again; the device is rebuilt in place (as big as its pins need, at least
+   *  its box), keeping its id so docked lines stay on their pins (by index) and follow them. */
+  private editDevice(d: ReturnType<Ligne['blocks']>[number]) {
+    const data = d.el.customData.ligne, kind = data.shape as BlockKind
+    if (!isDevice(kind)) return
+    const [x, y, w0, h0] = d.box
+    this.ask([x + w0 / 2, y + h0 / 2], spec => {
+      const font = this.labelFont(), { title, pins } = parseDevice(spec), [w, h] = deviceSize(kind, title, pins, font.fontSize * .6)
+      const g = d.el.groupIds?.at(-1), els = this.api.getSceneElements()
+      const made = block(this.convert, { kind, box: [x, y, Math.max(w, w0), Math.max(h, h0)], text: spec, color: d.el.strokeColor,
+        font }).map(e => e.customData?.ligne?.kind === 'block' ? { ...e, customData: { ligne: { ...e.customData.ligne, bid: d.bid } } } : e)
+      const gone = els.map(e => e.id === d.el.id || g && e.groupIds?.includes(g) ? bump(e, { isDeleted: true }) : e)
+      this.put([...gone, ...made], 'IMMEDIATELY')
+    }, data.spec ?? '', false, 'title; e: pins…')
+  }
+
   /** Blocks moved (by Excalidraw or undo): the ends of lines docked on them follow, their stubs with
    *  them, the legs after carried along so that they keep their directions. Not in history: undo moves
    *  the block back and this follows again. */
   private followBlocks() {
-    const now = new Map(this.blocks().map(b => [b.bid, b.box.map(v => Math.round(v * 100) / 100).join()]))
+    const now = new Map(this.blocks().map(b => [b.bid, b.box.map(v => Math.round(v * 100) / 100).join() + JSON.stringify(b.pins ?? '')]))
     const moved = [...now].filter(([id, k]) => this.blockBoxes.has(id) && this.blockBoxes.get(id) !== k).map(([id]) => id)
     this.blockBoxes = now
     if (!moved.length) return
-    const boxes = new Map(this.blocks().map(b => [b.bid, b.box]))
+    const boxes = new Map(this.blocks().map(b => [b.bid, b.box])), pins = new Map(this.blocks().map(b => [b.bid, b.pins]))
     setTimeout(() => {
       let scene = this.api.getSceneElements().slice(), hit = false
       for (const e of scene.filter(e => isLine(e) && !stale(e) && dataOf(e)!.docks)) {
@@ -1668,7 +1700,7 @@ export class Ligne {
         for (const [end, j, k] of [['start', 0, 1], ['end', n - 1, n - 2]] as const) {
           const d = dk[end], box = d && moved.includes(d.block) && boxes.get(d.block)
           if (!d || !box) continue
-          const to = portAt(box, d.port), by: XY = [to[0] - s.path[j][0], to[1] - s.path[j][1]]
+          const to = portAt(box, d.port, pins.get(d.block)), by: XY = [to[0] - s.path[j][0], to[1] - s.path[j][1]]
           if (Math.hypot(...by) < 1e-6) continue
           // the stub moves whole; the legs after it shift by the part of the move across them
           s.path[j] = to
@@ -1686,7 +1718,7 @@ export class Ligne {
           const ends = (['start', 'end'] as const).map(end => {
             const d = dk[end], box = d && boxes.get(d.block), at = end === 'start' ? s.path[0] : s.path[n - 1]
             if (!d || !box) return { at, stub: at }
-            const o = outOf(d.port), p = portAt(box, d.port), k = this.stub()
+            const o = outOf(d.port), p = portAt(box, d.port, pins.get(d.block)), k = this.stub()
             return { at: p, stub: [p[0] + o[0] * k, p[1] + o[1] * k] as XY, out: o }
           })
           const [a, b] = ends, mid = octi(a.stub, b.stub, undefined, a.out, g)
@@ -1857,11 +1889,12 @@ export class Ligne {
   }
 
   /** A small text box at scene point p; Enter (or leaving it) gives its text, Esc drops it. */
-  private ask(p: XY, done: (text: string) => void, value = '', empty = false) {
+  private ask(p: XY, done: (text: string) => void, value = '', empty = false, hint?: string) {
     this.input?.remove()
     const i = this.input = document.createElement('input'), [x, y] = this.screen(p)
     i.className = 'ligne-input'
-    i.placeholder = 'label'
+    i.placeholder = hint ?? 'label'
+    if (hint) i.style.width = `${Math.min(36, Math.max(hint.length, value.length, 20) * .62)}em`
     i.value = value
     Object.assign(i.style, { left: `${x}px`, top: `${y}px` })
     let over = false
@@ -2402,8 +2435,10 @@ export class Ligne {
           v => `×${v}`),
         font,
       ] : mode === 'block' ? [
-        ...BLOCKS.map((k, i) => ({ icon: 'b-' + k, title: `${k[0].toUpperCase() + k.slice(1)}: click (its size) or drag a box`,
-          key: String((i + 1) % 10), on: this.blockKind === k, click: () => { this.digit(i + 1); this.panelUI() } })),
+        ...BLOCKS.map((k, i) => ({ icon: 'b-' + k, title: isDevice(k)
+            ? `${k === 'mcu' ? 'MCU' : k === 'pc' ? 'PC' : k[0].toUpperCase() + k.slice(1)}: click, then its title and pins per side ("RP2040; e: USB, SDA, SCL; w: 5V, GND"); click it again to edit`
+            : `${k[0].toUpperCase() + k.slice(1)}: click (its size) or drag a box`,
+          key: i < 10 ? String((i + 1) % 10) : undefined, on: this.blockKind === k, click: () => { this.digit(i + 1); this.panelUI() } })),
         'sep' as const, colors, font,
       ] : [colors, cable, ends, { icon: 'tidy', title: 'Tidy the selected lines (else all); Enter keeps, Esc drops', key: 'Y',
           on: !!this.tidying, click: A.y }, { icon: 'rotate', title: 'Turn the selection 90° (⇧R: 45°); parts about pin 1', key: 'R', click: A.r },
