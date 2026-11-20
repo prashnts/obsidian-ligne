@@ -6,7 +6,7 @@
 import { dist, lengths, normals, octi, resample, round, unit, type XY } from './geom.ts'
 import type { Cable, Piece } from './cable.ts'
 import type { CoaxConn } from './coax.ts'
-import { ownColors } from './palette.ts'
+import { ownColors, wireColor } from './palette.ts'
 
 export const MM = 96 / 25.4                               // px per mm at Excalidraw's 96 dpi
 /** Silicone wire outer diameter in mm by AWG, representative (ribbon pitch = diameter). */
@@ -14,35 +14,50 @@ export const AWG: Record<number, number> = { 32: 0.7, 30: 0.9, 28: 1.1, 26: 1.4 
 export const GAUGES = [32, 30, 28, 26]
 export const FFC_PITCH = [0.5, 1]
 
-export type WireSet = 'mono' | 'qwiic' | 'grove' | 'rainbow' | 'usb' | 'own'
-export const SETS: WireSet[] = ['mono', 'qwiic', 'grove', 'rainbow', 'usb', 'own']
+export type WireSet = 'mono' | 'qwiic' | 'grove' | 'rainbow' | 'usb' | 't568b' | 't568a' | 'hdmi' | 'power' | 'mains'
+  | 'audio' | 'servo' | 'stepper' | 'own'
+export const SETS: WireSet[] = ['mono', 'qwiic', 'grove', 'rainbow', 'usb', 't568b', 't568a', 'hdmi', 'power', 'mains',
+  'audio', 'servo', 'stepper', 'own']
 /** Pin 1 first: Qwiic GND 3V3 SDA SCL, Grove SCL SDA VCC GND, rainbow ribbon brown to black, USB VBUS
- *  D- D+ GND. */
+ *  D- D+ GND, Ethernet T568B / A pins 1–8, HDMI's four pairs then CEC, SCL, SDA, HPD, +5V (makers
+ *  differ), DC + and −, mains L N PE, audio L R ground, hobby servo − + signal, stepper A+ A− B+ B−. */
 const COLORS: Record<Exclude<WireSet, 'mono' | 'own'>, string[]> = {
-  qwiic: ['#1e1e1e', '#e03131', '#1c7ed6', '#fab005'],
-  usb: ['#e03131', '#f1f3f5', '#2f9e44', '#1e1e1e'],
-  grove: ['#fab005', '#f1f3f5', '#e03131', '#1e1e1e'],
-  rainbow: ['#8b4513', '#e03131', '#fd7e14', '#fab005', '#2f9e44', '#1c7ed6', '#7048e8', '#868e96', '#f1f3f5',
-    '#1e1e1e'],
+  qwiic: ['black', 'red', 'blue', 'yellow'],
+  usb: ['red', 'white', 'green', 'black'],
+  grove: ['yellow', 'white', 'red', 'black'],
+  rainbow: ['brown', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'grey', 'white', 'black'],
+  t568b: ['white/orange', 'orange', 'white/green', 'blue', 'white/blue', 'green', 'white/brown', 'brown'],
+  t568a: ['white/green', 'green', 'white/orange', 'blue', 'white/blue', 'orange', 'white/brown', 'brown'],
+  hdmi: ['red', 'white/red', 'green', 'white/green', 'blue', 'white/blue', 'brown', 'white/brown', 'yellow', 'orange',
+    'violet', 'grey', 'black'],
+  power: ['red', 'black'], mains: ['brown', 'blue', 'green/yellow'], audio: ['red', 'white', 'copper'],
+  servo: ['brown', 'red', 'orange'], stepper: ['black', 'green', 'red', 'blue'],
 }
+/** A set's wire specs, pin 1 first (mono, own: none). */
+export const setColors = (set: WireSet) => set === 'mono' || set === 'own' ? undefined : COLORS[set]
+/** Wires a set has (a jacket made for it takes as many). */
+export const setSize = (set: WireSet) => set === 'mono' || set === 'own' ? undefined : COLORS[set].length
 
 /** Wire colours of a set, for a sample (mono: the line colour, striped; own: the cable's `colors`). */
-export const swatch = (set: WireSet, base: string, own?: string[]) => set === 'mono' ? [base, '#ffffff', base, base]
-  : set === 'own' ? (own?.length ? own : [base]) : COLORS[set]
+export const swatch = (set: WireSet, base: string, own?: string[], pastel = false) => set === 'mono'
+  ? [base, '#ffffff', base, base]
+  : (set === 'own' ? (own?.length ? own : [base]) : COLORS[set]).map(w => wireColor(w, pastel).color)
 
 /** Cable ends: wire housings (Dupont female / male, JST PH, SH, MX), an FFC's ZIF, a jacket's
  *  stripped end or its plugs (jacket.ts). */
 export type Conn = 'none' | 'dupont' | 'dupontm' | 'jst' | 'sh' | 'mx' | 'zif' | Plug | CoaxConn
-export type Plug = 'strip' | 'usbc' | 'usba' | 'microb' | 'barrel' | 'trs' | 'rj45'
+export type Plug = 'strip' | 'usbc' | 'usba' | 'usbb' | 'microb' | 'minib' | 'barrel' | 'trs' | 'rj45' | 'hdmi'
+  | 'minihdmi' | 'microhdmi' | 'dp'
 const WIRED: Conn[] = ['dupont', 'dupontm', 'jst', 'sh', 'mx']
 export const CONNS: Record<'ribbon' | 'ffc' | 'jacket' | 'coax', Conn[]> = {
   ribbon: ['none', ...WIRED], ffc: ['none', 'zif'],
-  jacket: ['none', 'strip', ...WIRED, 'usbc', 'usba', 'microb', 'barrel', 'trs', 'rj45'],
+  jacket: ['none', 'strip', ...WIRED, 'usbc', 'usba', 'usbb', 'microb', 'minib', 'barrel', 'trs', 'rj45', 'hdmi',
+    'minihdmi', 'microhdmi', 'dp'],
   coax: ['none', 'strip', 'sma', 'smaf', 'rpsma', 'rpsmaf', 'ufl', 'mmcx', 'n', 'f', 'bnc'] }
 export const CONN_NAMES: Record<Conn, string> = {
   none: 'none', dupont: 'Dupont F', dupontm: 'Dupont M', jst: 'JST PH', sh: 'SH', mx: 'MX 1.25', zif: 'ZIF',
-  strip: 'stripped', usbc: 'USB-C', usba: 'USB-A', microb: 'micro-B', barrel: 'barrel 5.5', trs: '3.5 mm',
-  rj45: 'RJ45', sma: 'SMA plug', smaf: 'SMA jack', rpsma: 'RP-SMA plug', rpsmaf: 'RP-SMA jack', ufl: 'U.FL',
+  strip: 'stripped', usbc: 'USB-C', usba: 'USB-A', usbb: 'USB-B', microb: 'micro-B', minib: 'mini-B', barrel: 'barrel 5.5',
+  trs: '3.5 mm', rj45: 'RJ45', hdmi: 'HDMI', minihdmi: 'mini HDMI', microhdmi: 'micro HDMI', dp: 'DisplayPort', sma: 'SMA plug', smaf: 'SMA jack', rpsma: 'RP-SMA plug', rpsmaf: 'RP-SMA jack', ufl: 'U.FL',
   mmcx: 'MMCX', n: 'N plug', f: 'F (sat)', bnc: 'BNC' }
 /** Wire housings: the wires close up to their pitch and go into one. */
 export const isHousing = (k?: Conn) => !!k && WIRED.includes(k)
@@ -73,13 +88,13 @@ export function sides(c: Cable, legs: number): number[] {
   return Array.from({ length: legs }, (_, i) => (s *= c.folds?.[i] ? -1 : 1))
 }
 
-/** Wire j's colour (a split keeps its parent's wires: `pick`) and whether it has the stripe. */
-export function wire(c: Cable, j: number, base: string): { color: string, stripe: boolean } {
+/** Wire j's colour (a split keeps its parent's wires: `pick`) and its stripe's, if any (mono: the
+ *  first wire, white); `pastel` cables in pastel tones. */
+export function wire(c: Cable, j: number, base: string): { color: string, stripe?: string } {
   const k = c.pick?.[j] ?? j, set = c.set ?? 'mono'
-  if (set === 'mono') return { color: base, stripe: k === 0 }
-  if (set === 'own') return { color: ownColors(k + 1, c.colors)[k], stripe: false }
-  const cs = COLORS[set]
-  return { color: cs[k % cs.length], stripe: false }
+  if (set === 'mono') return k === 0 ? { color: base, stripe: '#ffffff' } : { color: base }
+  const cs = set === 'own' ? ownColors(k + 1, c.colors) : COLORS[set]
+  return wireColor(cs[k % cs.length], c.pastel)
 }
 
 /** #rgb / #rrggbb mixed t of the way to `to`; other colours as they are. */
@@ -152,6 +167,8 @@ export function flat(path: XY[], radii: readonly number[], c: Cable, base: strin
   const film = (s: number) => s > 0 ? '#ece6d2' : '#d9cfae'
   const band = (s: number) => ffc ? film(s) : lift(mix(c.set && c.set !== 'mono' ? '#b0b0b0' : base, '#ffffff', .3), s, .3)
   const ww = ffc ? P * .45 : P * .84, line = Math.max(.5, .15 * k)
+  // mono: the stripe in `light`; a set: the wire's own
+  const sc = (w: { stripe?: string }) => (c.set ?? 'mono') === 'mono' ? light : w.stripe!
   // sections between folds inside the line; each runs one side up
   const cuts = [0, ...path.map((_, i) => i).filter(i => i > 0 && i < last && c.folds?.[i]), last]
   const conns = { start: c.conn?.start ?? 'none', end: c.conn?.end ?? 'none' }
@@ -200,7 +217,7 @@ export function flat(path: XY[], radii: readonly number[], c: Cable, base: strin
     for (let j = 0; j < c.n; j++) {
       const w = wire(c, j, base), pts = at(s * os[j])
       out.push({ pts, color: ffc ? '#a8a08a' : lift(w.color, s, .2), width: ww })
-      if (w.stripe && !ffc) out.push({ pts, color: light, width: P * .28, dash: s < 0 })
+      if (w.stripe && !ffc) out.push({ pts, color: sc(w), width: P * .28, dash: s < 0 })
     }
     if (a === 0) ends.start = { at: body.pts[0], u: legDir(body.pts[1], body.pts[0]), nl: ns[0], side: s }
     if (b === last) {
@@ -227,7 +244,7 @@ export function flat(path: XY[], radii: readonly number[], c: Cable, base: strin
         const pts = dist(from, tips[j]) > 1e-6 ? round(octi(from, tips[j], undefined, e.u), 2 * P) : [from]
         if (pts.length > 1) {
           out.push({ pts, color: lift(w.color, e.side, .2), width: ww })
-          if (w.stripe) out.push({ pts, color: light, width: P * .28, dash: e.side < 0 })
+          if (w.stripe) out.push({ pts, color: sc(w), width: P * .28, dash: e.side < 0 })
         }
         if (!isHousing(conn)) continue
         const u = pts.length > 1 ? legDir(pts[pts.length - 2], pts[pts.length - 1]) : e.u, h = HOUSING[conn as 'dupont']
@@ -242,7 +259,7 @@ export function flat(path: XY[], radii: readonly number[], c: Cable, base: strin
         const o = e.side * os[j], p = e.side * (j - (c.n - 1) / 2) * cp, w = wire(c, j, base)
         const pts = Array.from({ length: 13 }, (_, i) => add(add(e.at, e.u, F * i / 12), e.nl, o + (p - o) * smooth(i / 12)))
         out.push({ pts, color: lift(w.color, e.side, .2), width: Math.min(ww, cp * .84) })
-        if (w.stripe) out.push({ pts, color: light, width: Math.min(ww, cp * .84) / 3, dash: e.side < 0 })
+        if (w.stripe) out.push({ pts, color: sc(w), width: Math.min(ww, cp * .84) / 3, dash: e.side < 0 })
       }
       out.push(...housing(add(e.at, e.u, F), e.u, e.nl, e.side, c, conn, cp, D, (c.n - 1) * cp + h.edge * k))
     }

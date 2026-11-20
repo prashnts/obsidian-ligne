@@ -15,7 +15,13 @@ const left = (u: XY): XY => [-u[1], u[0]]
 const PLUGS: Record<Exclude<Plug, 'strip'>, { w: number, l: number, mw: number, ml: number, round?: boolean }> = {
   usbc: { w: 11, l: 16, mw: 8.4, ml: 6.6, round: true },
   usba: { w: 16, l: 18, mw: 12, ml: 12 },
+  usbb: { w: 16, l: 20, mw: 12, ml: 9 },
   microb: { w: 10, l: 14, mw: 6.9, ml: 5.5 },
+  minib: { w: 11, l: 15, mw: 6.8, ml: 5.5 },
+  hdmi: { w: 21, l: 26, mw: 14, ml: 11.5 },
+  minihdmi: { w: 14, l: 21, mw: 10.4, ml: 7.5 },
+  microhdmi: { w: 10.5, l: 18, mw: 6.4, ml: 6.5 },
+  dp: { w: 21, l: 27, mw: 16.1, ml: 12 },
   barrel: { w: 9, l: 14, mw: 5.5, ml: 9.5, round: true },
   trs: { w: 6, l: 16, mw: 3.5, ml: 14, round: true },
   rj45: { w: 11.7, l: 21, mw: 0, ml: 0 },
@@ -91,6 +97,9 @@ function fit(c: Cable, end: End, at: XY, u: XY, base: string, dark: string, line
     out.push(box(m1, u, p.ml * k, mw, '#ced4da', '#868e96', line, p.round ? Math.min(mw / 2, 1.3 * k) : .3 * k))
     if (conn === 'usba') for (const o of [-1, 1])
       out.push(box(add(add(m1, u, p.ml * k * .55), n, o * mw * .22), u, 2.5 * k, 2 * k, '#495057', '#495057', line / 2))
+    if (conn === 'hdmi' || conn === 'minihdmi' || conn === 'microhdmi' || conn === 'dp')
+      out.push(box(add(m1, u, p.ml * k * .25), u, p.ml * k * .6, mw * .55, '#495057', '#495057', line / 2))
+    if (conn === 'usbb') out.push(box(add(m1, u, p.ml * k * .2), u, p.ml * k * .7, mw * .5, '#495057', '#495057', line / 2))
     if (conn === 'trs') for (const t of [.45, .7])
       out.push(box(add(m1, u, p.ml * k * t), u, .8 * k, mw, '#343a40', '#343a40', line / 2))
     return out
@@ -114,7 +123,9 @@ function fit(c: Cable, end: End, at: XY, u: XY, base: string, dark: string, line
     const pts = Array.from({ length: 13 }, (_, i) => add(add(p0, u, F * i / 12), n, o0 + (o1 - o0) * smooth(i / 12)))
     const run = h ? 4 * k : LEAD * k - F
     pts.push(add(add(p0, u, F + run), n, o1))
-    out.push({ pts, color: w.color, width: ww })
+    // a darker rim, so pale wires show on paper
+    out.push({ pts, color: mix(w.color, '#000000', .3), width: ww + line }, { pts, color: w.color, width: ww })
+    if (w.stripe) out.push({ pts, color: w.stripe, width: ww * .38 })
     if (!h) out.push({ pts: [add(add(p0, u, F + run - TIN * k), n, o1), add(add(p0, u, F + run), n, o1)],
       color: '#adb5bd', width: ww * .7 })
   }

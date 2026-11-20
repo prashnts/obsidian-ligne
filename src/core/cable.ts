@@ -2,7 +2,7 @@
 // checks; ribbons and FFC (flat.ts), jacketed round cables (jacket.ts), chevron bands. Each end may
 // fan out into legs, one per strand, each to its own point, or all fanned out evenly. Output is plain pieces (polylines and filled polygons), for any host to draw.
 import type { CoaxKind } from './coax.ts'
-import { MM, flatWidth, isFlat, type Conn, type WireSet } from './flat.ts'
+import { MM, flatWidth, isFlat, mix, wire, type Conn, type WireSet } from './flat.ts'
 import { dist, lengths, normals, octi, pointAt, resample, round, unit, type XY } from './geom.ts'
 
 const sub = (a: XY, b: XY): XY => [a[0] - b[0], a[1] - b[1]]
@@ -17,11 +17,12 @@ export interface Legs { start?: (XY | null)[], end?: (XY | null)[] }
 /** `pitch`: length of one full twist, or of two checks. Flat cables (ribbon, ffc): `awg` (ribbon)
  *  or `mm` (FFC pitch), true size × `scale`; ribbon colours `set`, of which a split takes the wires
  *  `pick` (set 'own': each wire's colour in `colors`); `folds` per waypoint (the first: starts back up); a connector at each end. A jacket: `mm`
- *  across, n wires inside, `shield` braid. Twisted ends `fan` out evenly: `gap` apart, `len` long. */
+ *  across, n wires inside, `shield` braid. `pastel`: wire colours in pastel tones; `kind`: the
+ *  preset it was made from (kinds.ts). Twisted ends `fan` out evenly: `gap` apart, `len` long. */
 export interface Cable {
   style: CableStyle, n: number, pitch: number, legs?: Legs,
   awg?: number, mm?: number, scale?: number, set?: WireSet, pick?: number[], folds?: boolean[],
-  conn?: { start?: Conn, end?: Conn }, shield?: boolean, colors?: string[], coax?: CoaxKind,
+  conn?: { start?: Conn, end?: Conn }, shield?: boolean, colors?: string[], coax?: CoaxKind, pastel?: boolean, kind?: string,
   fan?: { start?: boolean, end?: boolean, gap: number, len: number },
 }
 
@@ -111,13 +112,17 @@ export function cable(drawn: XY[], c: Cable, w: number): { pieces: Piece[], tips
     const own = c.legs?.[end]?.[j]
     legOut(st, end, own ?? fanLeg(c, drawn, end, j), !own)
   }))
-  const pieces: Piece[] = strands.map((st, j) => ({ pts: st.pts, color: twisted ? (j % 2) as 0 | 1 : 0 }))
+  // a wire set (not mono): each strand its own colour, else the line's and the second one
+  // (a striped wire, as white/green: a pale tint of its stripe, so it shows on paper)
+  const own = c.set && c.set !== 'mono', tint = (w: { color: string, stripe?: string }) => w.stripe ? mix(w.stripe, w.color, .45) : w.color
+  const col = (j: number): Piece['color'] => own ? tint(wire(c, j, '')) : twisted ? (j % 2) as 0 | 1 : 0
+  const pieces: Piece[] = strands.map((st, j) => ({ pts: st.pts, color: col(j) }))
   // checks: every other check of every strand in the second colour, shifted strand to strand;
   // a twisted pair: the first strand back on top at every other crossing (over, under, over)
   const over = twisted
     ? c.n === 2 ? ribbons([strands[0]], w, P / 2, P / 4, k => k % 2 === 0) : []
     : ribbons(strands, w, P / 2, 0, (k, j) => (k + j) % 2 !== 0, j => os[j] < 0 ? 1 : -1)
-  for (const pts of over) pieces.push({ pts, color: twisted ? 0 : 1, fill: true })
+  for (const pts of over) pieces.push({ pts, color: twisted ? col(0) : 1, fill: true })
   return { pieces, tips: { start: strands.map(st => st.pts[0]), end: strands.map(st => st.pts.at(-1)!) } }
 }
 

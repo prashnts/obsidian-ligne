@@ -20,14 +20,16 @@
 import { STYLES, cableWidth, fanLeg, isSheathed, type Cable, type CableStyle } from './core/cable.ts'
 import { BLOCKS, SIZE, nearestPort, outOf, portAt, type BlockKind, type Dock, type Port } from './core/block.ts'
 import { COAX, COAX_KINDS, type CoaxKind } from './core/coax.ts'
-import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, across, endOf, flatTips, isFlat, swatch, wire, wirePitch,
-  type Conn } from './core/flat.ts'
+import { CONNS, CONN_NAMES, FFC_PITCH, GAUGES, SETS, across, endOf, flatTips, isFlat, setColors, setSize, swatch, wire,
+  wirePitch, type Conn, type WireSet } from './core/flat.ts'
+import { KINDS, KIND_IDS, kindCable, stdSize } from './core/kinds.ts'
 import { JOINTS, JOINT_NAMES, jointReach, type JointKind } from './core/joint.ts'
 import { beside, carry, concentric, diagFirst, dist, isDiag, kept, lastDir, nearest, octi, octiPoint, offsetAt, simplify,
   pointAt, round, same, snapDir, unit, upright, type Grid, type XY } from './core/geom.ts'
 import { dropBend, dropJogs, jog, legNormal, roomBends, roomy, shiftLeg, spliceAlong, tidyAlong, type Along } from './core/edit.ts'
 import { bendOf, needs } from './core/lead.ts'
-import { METRO, SIGNALS, SIGNAL_NAMES, netColor, ownColors } from './core/palette.ts'
+import { METRO, PASTEL, SIGNALS, SIGNAL_NAMES, WIRES, WIRE_NAMES, netColor, ownColors, parseWires, tone, wireColor
+  } from './core/palette.ts'
 import { graph, middle, toText, type Cap, type Link, type Shape } from './core/graph.ts'
 import { align, aligned, isoLines, lattice, type Guide } from './core/guides.ts'
 import { clear, edgeOut, type Box } from './core/place.ts'
@@ -100,6 +102,8 @@ const HELP: [string, string][] = [
   ['J', 'join: start on a line\'s end (a ribbon\'s wire, a jacket\'s next wire): the new line goes on from it, under a heat-shrink, boot or splice'],
   ['coax', '1.13 mm to LMR-400 true to size · stripped, SMA / RP-SMA plug or jack, U.FL, MMCX, N, F, BNC'],
   ['ribbon / FFC', 'true size × scale · wire colours in the popover · E gauge / pitch'],
+  ['jacket', 'kinds: USB, HDMI, Ethernet, DC, audio… at their thicknesses · plugs on both ends or on one'],
+  ['own colours', 'pick each wire\'s colour and stripe, move it, or type "red black white/blue"; save by name (Mine)'],
   ['B · ⇧B (flat)', 'fold at the next corner: turns over, the back shows · bend the other way'],
   ['C', 'connector: Dupont F / M, JST PH, SH, MX, ZIF, USB-C / A / micro-B, barrel, 3.5 mm, RJ45 · over an end: it'],
   ['popover', 'edits the selected lines if any ("For"), else sets up the next line'],
@@ -168,7 +172,10 @@ export class Ligne {
   jointKind: JointKind = 'shrink'
   private joining?: { el: any, end: 'start' | 'end' } // the line being drawn goes on from this end
   private tidying?: { n: number, before: XY[][] }   // a tidy shown, not yet kept: what it changed
-  cable: Cable = { style: 'checks', n: 2, pitch: 16 }
+  cable: Cable = { style: 'checks', n: 2, pitch: 16, pastel: true }
+  mine: { name: string, colors: string[] }[] = []    // wire colour sets of the user's own, named
+  connEnd: 'both' | 'start' | 'end' = 'both'       // the popover's connectors go on this end
+  private wireSel?: number                         // own colours: the wire being picked
   free = false                                     // sticky Shift
   snap = true                                      // onto lines and lanes; Ctrl/Cmd held: off
   bend = false                                     // B: the other leg first
@@ -1371,9 +1378,9 @@ export class Ligne {
 
   private save() {
     const { r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind, scale, ends, casing, byNet,
-      nextColor, jointKind, labelDir, blockKind } = this
+      nextColor, jointKind, labelDir, blockKind, mine } = this
     localStorage.setItem(OPTS, JSON.stringify({ r, cable, onLine, spread, gridMode, labelType, solid, font, size, partKind,
-      scale, ends, casing, byNet, nextColor, jointKind, labelDir, blockKind }))
+      scale, ends, casing, byNet, nextColor, jointKind, labelDir, blockKind, mine }))
   }
 
   private undoStop() {
@@ -2014,6 +2021,50 @@ export class Ligne {
     this.panelUI()
   }
 
+  /** A wire set: a jacket takes as many wires as the set has; own colours start from the set before. */
+  private wireSet(set: WireSet) {
+    const c = this.cable, was = c.set === 'own' ? c.colors : c.set && setColors(c.set)
+    const n = c.style === 'jacket' ? setSize(set) ?? c.n : c.n
+    this.wireSel = undefined
+    this.cabling(set === 'own' ? { set, colors: ownColors(n, was ?? undefined) } : { set, n })
+  }
+
+  /** Own wire colours (specs: 'red', 'white/orange', '#hex'); jackets and ribbons take as many wires. */
+  private ownWires(colors: string[]) {
+    if (!colors.length) return
+    const c = this.cable, twisted = !isFlat(c) && c.style !== 'jacket'
+    if (this.wireSel !== undefined && this.wireSel >= colors.length) this.wireSel = undefined
+    this.cabling({ set: 'own', colors, ...(twisted ? {} : { n: colors.length }) })
+  }
+
+  /** Pastel on or off: the wires, and the jacket when its colour is a wire colour. */
+  private pastel(on: boolean) {
+    const now = this.api.getAppState().currentItemStrokeColor
+    const hit = Object.values(WIRES).find(t => t[on ? 0 : 1] === now)
+    if (hit) this.pickColor(hit[on ? 1 : 0])
+    this.cabling({ pastel: on })
+  }
+
+  /** A cable kind (USB-C, HDMI, Ethernet…) at a thickness: a jacket with its wires, plugs and colour. */
+  private kind(id: string, size?: string) {
+    const k = KINDS[id], c = this.cable
+    this.twist = true
+    if (c.kind !== id) this.pickColor(tone(k.color, c.pastel))
+    this.cabling({ ...kindCable(id, size, setSize(k.set) ?? 4), scale: c.style === 'jacket' ? c.scale ?? 2 : 2 })
+  }
+
+  /** A connector on the popover's end (both, start or end) of the next line and the selected ones. */
+  private plug(k: Conn) {
+    const ends = this.connEnd === 'both' ? ['start', 'end'] : [this.connEnd]
+    const put = (c?: Cable['conn']) => ({ ...c, ...Object.fromEntries(ends.map(e => [e, k])) })
+    this.cable = { ...this.cable, conn: put(this.cable.conn) }
+    this.applySel(s => {
+      if (s.kind === 'line' && s.cable) s.cable = { ...s.cable, conn: put(s.cable.conn) }
+    }, 'IMMEDIATELY')
+    this.save()
+    this.panelUI()
+  }
+
   /** A finished line's ends and casing, from ligne's settings (the paper colour for both). */
   private endsSpec() {
     const none = this.ends.start === 'none' && this.ends.end === 'none'
@@ -2104,19 +2155,72 @@ export class Ligne {
       more: (v: T) => Partial<Btn> = () => ({})): Item[] => vals.map(v => ({ title: `${label}: ${text(v)}`, text: text(v),
       on: v === now, click: () => set(v), ...more(v) }))
     const kind = this.twist ? c.style : 'plain'
-    // wire colour sets; 'own': each wire's colour picked from the signal colours (Qwiic order to start)
-    const base = this.api.getAppState().currentItemStrokeColor, cycle = SIGNAL_NAMES.map(n => SIGNALS[n])
+    // wire colour sets; 'own': each wire's colour and stripe picked by hand, or typed, saved by name
+    const base = this.api.getAppState().currentItemStrokeColor, P = !!c.pastel
     const own = (n: number) => ownColors(n, c.colors)
-    const wireRows = (def: string): Menu['rows'] => [
-      { label: 'Colours', items: opt('Wire colours', SETS, c.set ?? def as any, set => this.cabling(set === 'own'
-        ? { set, colors: own(c.n) } : { set }), v => v, v => ({ swatch: swatch(v, base, own(c.n)) })) },
-      ...(c.set === 'own' ? [{ label: 'Wires', items: own(Math.min(c.n, 16)).map((col, j) => ({
-        title: `Wire ${j + 1}: ${SIGNAL_NAMES.find(n => SIGNALS[n] === col) ?? col} (click: next signal colour)`,
-        swatch: [col], text: String(j + 1), click: () => {
-          const all = own(c.n)
-          all[j] = cycle[(cycle.indexOf(col) + 1) % cycle.length]
-          this.cabling({ colors: all })
-        } })) }] : [])]
+    const looks = (w: string) => { const v = wireColor(w, P); return v.stripe ? [v.color, v.stripe, v.color] : [v.color] }
+    const pastel: Btn = { icon: 'palette', text: 'pastel', title: 'Pastel tones: the wires, and the jacket when it is a wire colour',
+      on: P, click: () => this.pastel(!P) }
+    const wireRows = (def: string): Menu['rows'] => {
+      const out: Menu['rows'] = [{ label: 'Colours', items: [...opt('Wire colours', SETS, c.set ?? def as WireSet,
+        set => this.wireSet(set), v => v, v => ({ swatch: swatch(v, base, own(c.n), P) })), pastel] }]
+      if (this.mine.length) out.push({ label: 'Mine', items: this.mine.map(m => ({ text: m.name,
+        swatch: m.colors.slice(0, 8).map(w => wireColor(w, P).color), title: `${m.name}: ${m.colors.join(' ')} (Alt-click: forget it)`,
+        on: c.set === 'own' && c.colors?.join() === m.colors.join(), click: (e: MouseEvent) => {
+          if (!e.altKey) return this.ownWires(m.colors)
+          this.mine = this.mine.filter(x => x !== m); this.save(); this.panelUI()
+        } })) })
+      if (c.set !== 'own') return out
+      const cols = own(c.n), j = this.wireSel, at = (i: number, w: string) => this.ownWires(cols.map((x, k) => k === i ? w : x))
+      out.push({ label: 'Wires', items: [...cols.slice(0, 40).map((w, i) => ({ title: `Wire ${i + 1}: ${w} (click: pick its colour)`,
+        swatch: looks(w), text: String(i + 1), on: i === j, click: () => { this.wireSel = i === j ? undefined : i; this.panelUI() } })),
+        { text: '+', title: 'One more wire, like the last', click: () => this.ownWires([...cols, cols.at(-1) ?? 'black']) },
+        { text: '−', title: 'One wire less: the picked one, else the last',
+          click: () => this.ownWires(cols.filter((_, i) => i !== (j ?? cols.length - 1))) }] })
+      if (j !== undefined && j < cols.length) {
+        const [a, b] = cols[j].split('/')
+        out.push(
+          { label: 'Colour', items: WIRE_NAMES.map(n => ({ title: `Wire ${j + 1}: ${n}`, swatch: [tone(n, P)], on: a === n,
+            click: () => at(j, b ? `${n}/${b}` : n) })) },
+          { label: 'Stripe', items: [{ text: 'none', title: 'No stripe', on: !b, click: () => at(j, a) },
+            ...WIRE_NAMES.map(n => ({ title: `Wire ${j + 1}: ${a} with a ${n} stripe`, swatch: [tone(a, P), tone(n, P), tone(a, P)],
+              on: b === n, click: () => at(j, `${a}/${n}`) }))] },
+          { label: 'Move', items: [
+            { text: '◀', title: 'Move the wire towards pin 1', click: () => {
+              if (!j) return
+              const all = cols.slice(); [all[j - 1], all[j]] = [all[j], all[j - 1]]; this.wireSel = j - 1; this.ownWires(all)
+            } },
+            { text: '▶', title: 'Move the wire away from pin 1', click: () => {
+              if (j >= cols.length - 1) return
+              const all = cols.slice(); [all[j + 1], all[j]] = [all[j], all[j + 1]]; this.wireSel = j + 1; this.ownWires(all)
+            } }] })
+      }
+      // typed: 'red black white/blue …' (names, short names, #hex); saved under a name for later cables
+      const field = (ph: string, value: string, done: (v: string) => void, wide = false) => {
+        const i = Object.assign(document.createElement('input'), { className: 'ligne-field', placeholder: ph, value })
+        if (wide) i.style.width = '18em'
+        i.onkeydown = e => {
+          e.stopPropagation()
+          if (e.key === 'Enter') { done(i.value.trim()); this.container()?.focus({ preventScroll: true }) }
+        }
+        i.onkeyup = i.onkeypress = e => e.stopPropagation()
+        return i
+      }
+      out.push({ label: 'Type', items: [field('red black white/blue … (Enter)', cols.join(' '), v => this.ownWires(parseWires(v)), true)] },
+        { label: 'Save', items: [field('name (Enter): saved under Mine', '', name => {
+          if (!name) return
+          this.mine = [...this.mine.filter(m => m.name !== name), { name, colors: cols }]
+          this.save(); this.panelUI()
+        })] })
+      return out
+    }
+    // connectors: on both ends, or on one (a USB-C to MX cable, …)
+    const endOn = this.connEnd === 'start' ? c.conn?.start : c.conn?.end
+    const plugRows = (groups: [string, readonly Conn[]][]): Menu['rows'] => [
+      { label: 'On', items: opt('Connectors go on', ['both', 'start', 'end'] as const, this.connEnd,
+        v => { this.connEnd = v; this.panelUI() }, v => v === 'both' ? 'both ends' : `${v}`) },
+      ...groups.map(([label, ks]) => ({ label, items: opt(`${this.connEnd === 'both' ? 'Both ends' : `The ${this.connEnd}`} [C; over an end: that end]`,
+        [...ks], endOn ?? 'none', k => this.plug(k), v => CONN_NAMES[v]) }))]
     const types = ['plain', ...STYLES] as const
     // what the popover edits: the selected lines, else the lines drawn next
     const sel = this.selLines().length
@@ -2127,30 +2231,35 @@ export class Ligne {
       click: () => k === 'plain' ? (this.twist = false, this.cabling()) : this.restyle(k) })) }]
     if (this.twist && c.style === 'chevron') rows.push({ label: 'Width', items: [this.range('Band width', 6, 80, c.pitch,
       (v, cap) => this.cabling({ pitch: v }, cap, false))] })
-    else if (this.twist && c.style === 'jacket') rows.push(
-      { label: 'Wires', items: [this.range('Wires inside', 1, 12, c.n, (v, cap) => this.cabling({ n: v }, cap, false))] },
-      { label: 'Across', items: opt('Jacket across', [2.5, 3, 4, 5, 6, 8], c.mm ?? 4, mm => this.cabling({ mm }),
-        v => `${v} mm`) },
+    else if (this.twist && c.style === 'jacket') {
+      const k = c.kind ? KINDS[c.kind] : undefined
+      rows.push(
+      { label: 'Kind', items: KIND_IDS.map(id => ({ text: KINDS[id].name, on: c.kind === id,
+        title: `${KINDS[id].name}: ${CONN_NAMES[KINDS[id].conn[0]]} to ${CONN_NAMES[KINDS[id].conn[1]]}, ${KINDS[id].set} wires, ${Object.entries(KINDS[id].sizes).map(([n, mm]) => `${n} ${mm} mm`).join(', ')}`,
+        click: () => this.kind(id) })) },
+      ...(k ? [{ label: 'Thick', items: opt(`${k.name} thickness`, Object.keys(k.sizes), Object.keys(k.sizes).find(n => k.sizes[n] === c.mm) ?? '',
+        n => this.kind(c.kind!, n), n => `${n} ${k.sizes[n]}`) }] : []),
+      { label: 'Wires', items: [this.range('Wires inside', 1, 24, c.n, (v, cap) => this.cabling({ n: v }, cap, false))] },
+      { label: 'Across', items: opt('Jacket across', [2, 2.5, 3, 3.5, 4, 4.5, 5, 6, 7, 8, 10], c.mm ?? 4, mm => this.cabling({ mm }),
+        v => `${v}`) },
       ...wireRows('usb'),
       { label: 'Size', items: [...opt('True size ×', [1, 2, 4], c.scale ?? 2, scale => this.cabling({ scale }), v => `×${v}`),
         { icon: 'shield', text: 'shield', title: 'Shielded: braid under the jacket, shown where stripped', on: !!c.shield,
           click: () => this.cabling({ shield: !c.shield }) }] },
-      ...([['Ends', CONNS.jacket.slice(0, 7)], ['Plugs', CONNS.jacket.slice(7)]] as const).map(([label, ks]) => ({ label,
-        items: opt('Both ends [C; over an end: that end]', [...ks], c.conn?.end ?? 'none',
-          k => this.cabling({ conn: { start: k, end: k } }), v => CONN_NAMES[v]) })))
+      ...plugRows([['Ends', CONNS.jacket.slice(0, 7)], ['Plugs', CONNS.jacket.slice(7)]]))
+    }
     else if (this.twist && c.style === 'coax') rows.push(
       { label: 'Type', items: opt('Coax type (its usual colour)', COAX_KINDS, c.coax ?? 'rg316', k => {
         this.pickColor(COAX[k].color)
         this.cabling({ coax: k, mm: COAX[k].mm })
       }, v => `${COAX[v].name}`) },
       { label: 'Size', items: opt('True size ×', [1, 2, 4], c.scale ?? 2, scale => this.cabling({ scale }), v => `×${v}`) },
-      ...([['Ends', CONNS.coax.slice(0, 6)], ['', CONNS.coax.slice(6)]] as const).map(([label, ks]) => ({ label,
-        items: opt('Both ends [C; over an end: that end]', [...ks], c.conn?.end ?? 'none',
-          k => this.cabling({ conn: { start: k, end: k } }), v => CONN_NAMES[v]) })))
+      ...plugRows([['Ends', CONNS.coax.slice(0, 6)], ['', CONNS.coax.slice(6)]]))
     else if (this.twist && !isFlat(c)) {
       const f = c.fan ?? { gap: 12, len: 60 }, ends = f.start && f.end ? 'both' : f.start ? 'start' : f.end ? 'end' : 'off'
       rows.push(
         { label: 'Strands', items: opt('Strands', [2, 3, 4], c.n, n => this.cabling({ n })) },
+        ...wireRows('mono'),
         { label: 'Twist', items: [this.range('Twist / check length', 4, 80, c.pitch,
           (v, cap) => this.cabling({ pitch: v }, cap, false))] },
         { label: 'Fan out', items: opt('Strands fan out at 45°, then run side by side', ['off', 'start', 'end', 'both'], ends,
@@ -2168,8 +2277,7 @@ export class Ligne {
           v => `${v} AWG`) },
       ...(ffc ? [] : wireRows('mono')),
       { label: 'Size', items: opt('True size ×', [1, 2, 4], c.scale ?? 1, scale => this.cabling({ scale }), v => `×${v}`) },
-      { label: 'Ends', items: opt('Connector at both ends [C; over an end: that end]', CONNS[ffc ? 'ffc' : 'ribbon'],
-        c.conn?.end ?? 'none', k => this.cabling({ conn: { start: k, end: k } }), v => CONN_NAMES[v]) },
+      ...plugRows([['Ends', CONNS[ffc ? 'ffc' : 'ribbon']]]),
       { label: 'Draw', items: [
         { icon: 'fold', text: 'fold', title: 'Fold at the next corner: the cable turns over', key: 'B', on: this.flip,
           click: A.b }] })
@@ -2182,6 +2290,8 @@ export class Ligne {
       click: () => this.openMenu('colors'), swatch: [now], rows: [
         { label: 'For', items: [target.cloneNode(true) as HTMLElement] },
         { label: 'Metro', items: METRO.map(m => ({ title: m.name, swatch: [m.color], on: m.color === now,
+          click: () => this.pickColor(m.color) })) },
+        { label: 'Pastel', items: PASTEL.map(m => ({ title: m.name, swatch: [m.color], on: m.color === now,
           click: () => this.pickColor(m.color) })) },
         { label: 'Signal', items: SIGNAL_NAMES.map(n => ({ title: n, swatch: [SIGNALS[n]], text: n, on: SIGNALS[n] === now,
           click: () => this.pickColor(SIGNALS[n]) })) },

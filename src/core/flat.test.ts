@@ -15,7 +15,9 @@ test('sizes: true to size at 96 dpi, times the scale', () => {
 test('sides and wires: a fold turns it over, a split keeps its parent wires', () => {
   assert.deepEqual(sides(ribbon({ folds: [false, true, false, true] }), 4), [1, -1, -1, 1])
   assert.deepEqual(sides(ribbon({ folds: [true] }), 2), [-1, -1])
-  assert.deepEqual([0, 1].map(j => wire(ribbon(), j, '#000').stripe), [true, false])
+  assert.deepEqual([0, 1].map(j => !!wire(ribbon(), j, '#000').stripe), [true, false])
+  assert.deepEqual(wire(ribbon({ set: 't568b' }), 0, '#000'), { color: '#f1f3f5', stripe: '#fd7e14' })
+  assert.equal(wire(ribbon({ set: 'own', colors: ['rd'], pastel: true }), 0, '#000').color, '#f4a6a6')
   assert.equal(wire(ribbon({ set: 'qwiic', pick: [2, 3] }), 0, '#000').color, '#1c7ed6')
   assert.equal(mix('#000', '#ffffff', .5), '#808080')
 })

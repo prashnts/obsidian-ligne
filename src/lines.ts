@@ -101,6 +101,8 @@ export function lineEls(convert: Convert, spec: Spec, st: Style, base?: any): an
   const [made] = convert([{ type: arrow ? 'arrow' : 'line', ...at, ...st,
     roundness: null, startArrowhead: arrow ? st.startArrowhead : null, endArrowhead: arrow ? st.endArrowhead === undefined ? 'arrow' : st.endArrowhead : null,
     ...(tint ? { backgroundColor: st.strokeColor + '33', fillStyle: 'solid' } : {}),
+    // a strand in a wire set's colour: the line takes it
+    ...(!pieces[0].fill && typeof pieces[0].color === 'string' ? { strokeColor: pieces[0].color } : {}),
     ...(pieces[0].fill ? { backgroundColor: typeof pieces[0].color === 'string' ? pieces[0].color : st.strokeColor,
       // the outline stays the line's colour: it is what restyles and rebuilds read back
       fillStyle: 'solid', strokeWidth: pieces[0].width, strokeStyle: 'solid', roughness: 0 } : {}),

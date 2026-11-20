@@ -183,7 +183,9 @@ function menu(m: Menu) {
   at.append(pop)
   // kept inside the window: opens leftwards when it would run off the right
   requestAnimationFrame(() => {
-    if (pop.getBoundingClientRect().right > window.innerWidth - 8) Object.assign(pop.style, { left: 'auto', right: '0' })
+    // shifted by what runs off: right first, then never past the left edge
+    const r = pop.getBoundingClientRect(), over = r.right - (window.innerWidth - 8)
+    if (over > 0) pop.style.left = `${-Math.min(over, r.left - 8)}px`
   })
   return at
 }
