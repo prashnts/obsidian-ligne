@@ -104,6 +104,7 @@ const HELP: [string, string][] = [
   ['ribbon / FFC', 'true size × scale · wire colours in the popover · E gauge / pitch'],
   ['jacket', 'kinds: USB, HDMI, Ethernet, DC, audio… at their thicknesses · plugs on both ends or on one'],
   ['own colours', 'pick each wire\'s colour and stripe, move it, or type "red black white/blue"; save by name (Mine)'],
+  ['mated plugs', 'joint kind (ends popover): J from a connector, the next line starts nose to nose with its own connector'],
   ['B · ⇧B (flat)', 'fold at the next corner: turns over, the back shows · bend the other way'],
   ['C', 'connector: Dupont F / M, JST PH, SH, MX, ZIF, USB-C / A / micro-B, barrel, 3.5 mm, RJ45 · over an end: it'],
   ['popover', 'edits the selected lines if any ("For"), else sets up the next line'],
@@ -1138,7 +1139,9 @@ export class Ligne {
     const n = path.length, a = at.end === 'end' ? path[n - 1] : path[0], b = at.end === 'end' ? path[n - 2] : path[1]
     const out = unit([a[0] - b[0], a[1] - b[1]]), u: XY = at.end === 'end' ? out : [-out[0], -out[1]], nl: XY = [-u[1], u[0]]
     let d = 0, color: string | undefined
-    if (w && c) {
+    if (this.jointKind === 'mate') {
+      // nose to nose: on from the middle of the connector
+    } else if (w && c) {
       d = across(c, endOf(path, c, w.end).side, w.j)
       color = wire(c, w.j, base).color
     } else if (c && isSheathed(c) && c.n > 1) {
@@ -1936,7 +1939,9 @@ export class Ligne {
       scene = [...scene.slice(0, k), ...layered(els), ...scene.slice(k)]
       const was = ps.joints?.[jn.end], wide = Math.max(was?.w ?? 0, bodyWidth(els[0]), bodyWidth(parent))
       ps.joints = { ...ps.joints, [jn.end]: { kind: was?.kind ?? this.jointKind, w: wide } }
-      if (ps.cable?.conn?.[jn.end]) ps.cable = { ...ps.cable, conn: { ...ps.cable.conn, [jn.end]: 'none' } }
+      // a sleeve takes the place of the end's connector; mated, it stays
+      if (ps.cable?.conn?.[jn.end] && ps.joints[jn.end]!.kind !== 'mate')
+        ps.cable = { ...ps.cable, conn: { ...ps.cable.conn, [jn.end]: 'none' } }
       // room for the sleeve on the line that ends
       const [n0, n1] = needs(ps.path, ps.radii, ps.cable, ps.joints, bodyWidth(parent))
       ps.path = roomy(ps.path, jn.end === 'start' ? n0 : 0, jn.end === 'end' ? n1 : 0,
